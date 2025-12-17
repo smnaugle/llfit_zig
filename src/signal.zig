@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const syts = @import("systematics.zig");
+const fit = @import("root.zig");
 
 pub const Signal = struct {
     value: f64 = 0,
@@ -8,17 +9,35 @@ pub const Signal = struct {
     sigma: f64 = std.math.inf(f64),
     name: []const u8 = "",
 
-    input_mc: std.AutoHashMap([]const u8, []f64) = undefined,
+    input_mc: fit.DataPoints = undefined,
     systematics: std.ArrayList(*syts.Systematic) = .{},
 
     _allocator: std.mem.Allocator = undefined,
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8) !Signal {
+    pub const DimensionPoints = struct {
+        dimension: *fit.Dimension = undefined,
+        points: []const f64 = &.{},
+    };
+
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, points: []const Signal.DimensionPoints) !Signal {
         var sig = Signal{};
         sig._allocator = allocator;
-        sig.input_mc = .init(sig._allocator);
+        sig.input_mc = .init(allocator);
+        for (points) |p| {
+            try sig.input_mc.putNoClobber(p.dimension.name, try sig._allocator.dupe(f64, p.points));
+        }
         sig.name = name;
         return sig;
+    }
+
+    pub fn deinit(self: *Signal) void {
+        var mc_iter = self.input_mc.iterator();
+        while (mc_iter.next()) |it| {
+            const value = it.value_ptr;
+            self._allocator.free(value.*);
+        }
+        self.input_mc.deinit();
+        self.systematics.deinit(self._allocator);
     }
 
     pub fn addSystematic(self: *Signal, systematic: *syts.Systematic) !void {

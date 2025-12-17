@@ -1,4 +1,8 @@
 const std = @import("std");
+const fit = @import("fit.zig");
+pub const DataPoints = std.StringHashMap([]f64);
+pub const Fit = fit.Fit;
+pub const Dataset = fit.Dataset;
 pub const Dimension = @import("Dimension.zig");
 pub const Signal = @import("signal.zig").Signal;
 pub const Systematic = @import("systematics.zig").Systematic;
