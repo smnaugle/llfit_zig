@@ -15,9 +15,11 @@ pub fn main() !void {
     const edim = try ppo.addDimension("energy", &.{ 1, 2, 3, 4, 5 });
     const bipo214 = try ppo.addSignal("Bipo214", &.{
         .{ .dimension = edim, .points = &.{ 1, 2, 4 } },
-        .{ .dimension = edim, .points = &.{ 1, 2, 4 } },
     });
     try bipo214.addSystematic(energy_shift);
+    // var hist_bins: [1]*[]f64 = ;
+    var hist = try fit.Histogram.init(allocator, &.{&edim.bins}, &.{bipo214.input_mc.get("energy").?});
+    defer hist.deinit();
     // var dim = try fit.Dimension.init(
     //     allocator,
     //     "energy",
@@ -37,4 +39,5 @@ pub fn main() !void {
     std.debug.print("edim: {s}\n", .{edim.name});
     std.debug.print("signal: {}\n", .{bipo214.*});
     std.debug.print("systematic: {}\n", .{bipo214.systematics.items[0].*});
+    std.debug.print("hist: {}\n", .{hist});
 }

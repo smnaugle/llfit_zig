@@ -6,3 +6,4 @@ pub const Dataset = fit.Dataset;
 pub const Dimension = @import("Dimension.zig");
 pub const Signal = @import("signal.zig").Signal;
 pub const Systematic = @import("systematics.zig").Systematic;
+pub const Histogram = @import("histogram.zig").Histogram;
