@@ -2,8 +2,7 @@ const std = @import("std");
 
 // ND is hard, lets just do everything flat under the hood
 pub const Histogram = struct {
-    // Bins can be ragged
-    bins: []*[]f64 = &.{},
+    bins: [][]f64 = &.{},
     nentries: u64 = 0,
     contents: []f64 = &.{},
 
@@ -11,22 +10,21 @@ pub const Histogram = struct {
     pub const Options = struct {
         density: bool = false,
     };
-    pub fn init(allocator: std.mem.Allocator, bins: []const *[]f64, points: []const []f64, options: Histogram.Options) !Histogram {
+    pub fn init(allocator: std.mem.Allocator, bins: []const []const f64, points: []const []const f64, options: Histogram.Options) !Histogram {
         var hist: Histogram = .{};
         hist._allocator = allocator;
-        hist.bins = try hist._allocator.alloc(*[]f64, bins.len);
+        hist.bins = try hist._allocator.alloc([]f64, bins.len);
         var total_bins: usize = 1;
         for (bins, 0..) |b, di| {
-            const nb_ptr = try hist._allocator.create([]f64);
-            nb_ptr.* = try hist._allocator.dupe(f64, b.*);
-            hist.bins[di] = nb_ptr;
-            total_bins *= (b.*.len - 1);
+            // const nb_ptr = try hist._allocator.create([]f64);
+            // nb_ptr.* = try hist._allocator.dupe(f64, b.*);
+            hist.bins[di] = try hist._allocator.dupe(f64, b);
+            total_bins *= (b.len - 1);
         }
         hist.contents = try hist._allocator.alloc(f64, total_bins);
         for (hist.contents) |*bin| {
             bin.* = 0;
         }
-        hist.nentries = @intCast(points[0].len);
         var point = try hist._allocator.alloc(f64, points.len);
         defer hist._allocator.free(point);
         for (0..points[0].len) |idx| {
@@ -48,8 +46,8 @@ pub const Histogram = struct {
             const coord = try self.flatIndexToOwnedBin(idx);
             defer self._allocator.free(coord);
             for (0..self.bins.len) |dim_idx| {
-                const bin_low = (self.bins[dim_idx]).*[coord[dim_idx]];
-                const bin_high = (self.bins[dim_idx]).*[coord[dim_idx] + 1];
+                const bin_low = (self.bins[dim_idx])[coord[dim_idx]];
+                const bin_high = (self.bins[dim_idx])[coord[dim_idx] + 1];
                 bin_vols[idx] *= (bin_high - bin_low);
             }
         }
@@ -117,8 +115,8 @@ pub const Histogram = struct {
         var coord_counts: u64 = 0;
         for (self.bins, 0..) |b, dim_idx| {
             if (dim_idx == 0) {}
-            for (0..(b.*.len - 1)) |bin_idx| {
-                if (value[dim_idx] >= b.*[bin_idx] and value[dim_idx] < b.*[bin_idx + 1]) {
+            for (0..(b.len - 1)) |bin_idx| {
+                if (value[dim_idx] >= b[bin_idx] and value[dim_idx] < b[bin_idx + 1]) {
                     bin_coordinate[dim_idx] = bin_idx;
                     coord_counts += 1;
                 }
@@ -128,13 +126,13 @@ pub const Histogram = struct {
             return;
         }
         const index = try self.coordinateToIndex(bin_coordinate);
+        self.nentries += 1;
         self.contents[index] += 1;
     }
 
     pub fn deinit(self: *Histogram) void {
-        for (self.bins) |b| {
+        for (self.bins) |*b| {
             self._allocator.free(b.*);
-            self._allocator.destroy(b);
         }
         self._allocator.free(self.bins);
         self._allocator.free(self.contents);

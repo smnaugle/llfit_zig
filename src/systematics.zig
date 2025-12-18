@@ -47,6 +47,6 @@ pub const Systematic = struct {
     }
 
     pub fn applySystematic(self: *Systematic, signal: *Signal) void {
-        self.applySystematicFn(signal);
+        self.applySystematicFn(self, signal);
     }
 };

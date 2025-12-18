@@ -3,8 +3,8 @@ const mem = std.mem;
 
 pub const Dimension = @This();
 
-bins: []f64 = undefined,
-bin_centers: []f64 = undefined,
+bins: []const f64 = undefined,
+bin_centers: []const f64 = undefined,
 name: []const u8 = "",
 
 _allocator: mem.Allocator = undefined,
@@ -13,12 +13,16 @@ pub fn init(allocator: mem.Allocator, name: []const u8, bins: []const f64) !Dime
     var dim: Dimension = .{};
     dim._allocator = allocator;
     dim.name = name;
-    dim.bins = try allocator.alloc(f64, bins.len);
-    @memcpy(dim.bins, bins);
-    dim.bin_centers = try allocator.alloc(f64, bins.len - 1);
-    for (0..(bins.len - 1)) |idx| {
-        dim.bin_centers[idx] = (bins[idx] + bins[idx + 1]) / 2;
+    var temp_bins = try allocator.alloc(f64, bins.len);
+    for (0..bins.len) |idx| {
+        temp_bins[idx] = bins[idx];
     }
+    dim.bins = temp_bins;
+    var temp_bin_centers = try allocator.alloc(f64, bins.len - 1);
+    for (0..(bins.len - 1)) |idx| {
+        temp_bin_centers[idx] = (bins[idx] + bins[idx + 1]) / 2;
+    }
+    dim.bin_centers = temp_bin_centers;
     return dim;
 }
 

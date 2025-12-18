@@ -1,6 +1,6 @@
 const std = @import("std");
 const fit = @import("fit.zig");
-pub const DataPoints = std.StringHashMap([]f64);
+pub const DataPoints = std.StringHashMap([]const f64);
 pub const Fit = fit.Fit;
 pub const Dataset = fit.Dataset;
 pub const Dimension = @import("Dimension.zig");
