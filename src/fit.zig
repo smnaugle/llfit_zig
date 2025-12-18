@@ -43,6 +43,12 @@ pub const Fit = struct {
         self.systematics.deinit(self._allocator);
         self.* = undefined;
     }
+
+    pub fn evaluate(self: Fit) f64 {
+        for (self.datasets) |dataset| {
+            dataset.evaluate();
+        }
+    }
 };
 
 pub const Dataset = struct {
@@ -50,7 +56,9 @@ pub const Dataset = struct {
     dimensions: std.ArrayList(*fit.Dimension) = .empty,
     signals: std.ArrayList(*fit.Signal) = .empty,
     // "energy": [e1, e2, ...]
-    data: std.AutoHashMap([]const u8, []f64) = undefined,
+    data: fit.DataPoints = undefined,
+    data_counts: []f64 = &.{},
+    binned_data: []f64 = &.{},
 
     _allocator: std.mem.Allocator = undefined,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !Dataset {
@@ -72,8 +80,28 @@ pub const Dataset = struct {
             self._allocator.destroy(signal);
         }
         self.signals.deinit(self._allocator);
+        var iter = self.data.valueIterator();
+        while (iter.next()) |val| {
+            self._allocator.free(val.*);
+        }
+        self._allocator.free(self.data_counts);
         self.data.deinit();
         self.* = undefined;
+    }
+
+    pub fn addData(self: *Dataset, data: []const fit.DimensionPoints) !void {
+        var bins = try self._allocator.alloc([]const f64, data.len);
+        defer self._allocator.free(bins);
+        var points = try self._allocator.alloc([]const f64, data.len);
+        defer self._allocator.free(points);
+        for (data, 0..) |p, idx| {
+            try self.data.putNoClobber(p.dimension.name, try self._allocator.dupe(f64, p.points));
+            bins[idx] = p.dimension.bins;
+            points[idx] = p.points;
+        }
+        var hist = try fit.Histogram.init(self._allocator, bins, points, .{ .density = false });
+        defer hist.deinit();
+        self.data_counts = try self._allocator.dupe(f64, hist.contents);
     }
 
     pub fn addDimension(self: *Dataset, name: []const u8, bins: []const f64) !*fit.Dimension {
@@ -83,10 +111,17 @@ pub const Dataset = struct {
         return dim_ptr;
     }
 
-    pub fn addSignal(self: *Dataset, name: []const u8, points: []const fit.Signal.DimensionPoints) !*fit.Signal {
+    pub fn addSignal(self: *Dataset, name: []const u8, points: []const fit.DimensionPoints) !*fit.Signal {
         const signal_ptr = try self._allocator.create(fit.Signal);
         signal_ptr.* = try .init(self._allocator, name, points);
         try self.signals.append(self._allocator, signal_ptr);
         return signal_ptr;
+    }
+
+    pub fn evaluate(self: Dataset) f64 {
+        for (self.signals.items) |signal| {
+            const probabilities = try signal.getProbability();
+            _ = probabilities;
+        }
     }
 };

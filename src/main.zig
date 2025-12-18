@@ -2,7 +2,6 @@ const std = @import("std");
 
 const fit = @import("llfit");
 
-const tv: fit.Systematic.SystematicOptions = .{ .applySystematicFn = undefined };
 fn scale(sys: *fit.Systematic, sig: *fit.Signal) void {
     std.debug.print("scaling\n", .{});
     const energies = sig._scratch_points[0];
@@ -23,6 +22,10 @@ pub fn main() !void {
     const energy_shift = try fitter.addSystematic(.{ .name = "energy_shift", .value = 2, .applySystematicFn = &scale });
     const edim = try ppo.addDimension("energy", &.{ 1, 2, 3, 4, 5 });
     const rdim = try ppo.addDimension("radius", &.{ 0, 1000, 2000, 3000 });
+    try ppo.addData(&.{
+        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 4.5 } },
+        .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
+    });
     const bipo214 = try ppo.addSignal("Bipo214", &.{
         .{ .dimension = edim, .points = &.{ 1.2, 1.2, 4.5 } },
         .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
@@ -30,4 +33,5 @@ pub fn main() !void {
     try bipo214.addSystematic(energy_shift);
     const probs = try bipo214.getProbability();
     std.debug.print("hist: {any}\n", .{probs});
+    std.debug.print("data: {any}\n", .{ppo.data_counts});
 }

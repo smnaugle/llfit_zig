@@ -20,12 +20,7 @@ pub const Signal = struct {
     _scratch_points: [][]f64 = &.{},
     _last_systematics: std.ArrayList(f64) = .empty,
 
-    pub const DimensionPoints = struct {
-        dimension: *fit.Dimension = undefined,
-        points: []const f64 = &.{},
-    };
-
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, points: []const Signal.DimensionPoints) !Signal {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, points: []const fit.DimensionPoints) !Signal {
         var sig = Signal{};
         sig._allocator = allocator;
         sig.input_mc = .init(allocator);
