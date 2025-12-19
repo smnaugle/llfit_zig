@@ -19,7 +19,7 @@ pub fn main() !void {
     var fitter: fit.Fit = .init(allocator, "fit");
     defer fitter.deinit();
     const ppo = try fitter.addDataset("ppo");
-    const energy_shift = try fitter.addSystematic(.{ .name = "energy_shift", .value = 2, .applySystematicFn = &scale });
+    const energy_shift = try fitter.addSystematic(.{ .name = "energy_shift", .value = 1, .expectation = 1.0, .sigma = 0.01, .applySystematicFn = &scale });
     const edim = try ppo.addDimension("energy", &.{ 1, 2, 3, 4, 5 });
     const rdim = try ppo.addDimension("radius", &.{ 0, 1000, 2000, 3000 });
     try ppo.addData(&.{
@@ -34,4 +34,5 @@ pub fn main() !void {
     const probs = try bipo214.getProbability();
     std.debug.print("hist: {any}\n", .{probs});
     std.debug.print("data: {any}\n", .{ppo.data_counts});
+    std.debug.print("eval: {d}\n", .{fitter.getNLL()});
 }

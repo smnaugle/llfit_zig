@@ -5,8 +5,8 @@ const fit = @import("root.zig");
 
 // TODO: Implement interface for signals to support binned and KDE PDFs.
 pub const Signal = struct {
-    value: f64 = 0,
-    expectation: f64 = 0,
+    value: f64 = 1,
+    expectation: f64 = 1,
     sigma: f64 = std.math.inf(f64),
     name: []const u8 = "",
 

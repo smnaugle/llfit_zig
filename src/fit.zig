@@ -1,6 +1,12 @@
 const std = @import("std");
 
 const fit = @import("root.zig");
+const utilities = @import("utilities.zig");
+
+/// Returns the __negative__ log-likelihood value of a Gaussian penalty term
+fn penalty(value: f64, mean: f64, sigma: f64) f64 {
+    return 0.5 * std.math.pow(f64, (value - mean) / sigma, 2);
+}
 
 pub const Fit = struct {
     name: []const u8 = "",
@@ -44,10 +50,15 @@ pub const Fit = struct {
         self.* = undefined;
     }
 
-    pub fn evaluate(self: Fit) f64 {
-        for (self.datasets) |dataset| {
-            dataset.evaluate();
+    pub fn getNLL(self: Fit) f64 {
+        var results: f64 = 0;
+        for (self.systematics.items) |systematic| {
+            results += penalty(systematic.value, systematic.expectation, systematic.sigma);
         }
+        for (self.datasets.items) |dataset| {
+            results += dataset.getNLL();
+        }
+        return results;
     }
 };
 
@@ -59,6 +70,7 @@ pub const Dataset = struct {
     data: fit.DataPoints = undefined,
     data_counts: []f64 = &.{},
     binned_data: []f64 = &.{},
+    _total_pdf_scratch: []f64 = &.{},
 
     _allocator: std.mem.Allocator = undefined,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !Dataset {
@@ -85,6 +97,7 @@ pub const Dataset = struct {
             self._allocator.free(val.*);
         }
         self._allocator.free(self.data_counts);
+        self._allocator.free(self._total_pdf_scratch);
         self.data.deinit();
         self.* = undefined;
     }
@@ -102,6 +115,7 @@ pub const Dataset = struct {
         var hist = try fit.Histogram.init(self._allocator, bins, points, .{ .density = false });
         defer hist.deinit();
         self.data_counts = try self._allocator.dupe(f64, hist.contents);
+        self._total_pdf_scratch = try self._allocator.alloc(f64, self.data_counts.len);
     }
 
     pub fn addDimension(self: *Dataset, name: []const u8, bins: []const f64) !*fit.Dimension {
@@ -118,10 +132,28 @@ pub const Dataset = struct {
         return signal_ptr;
     }
 
-    pub fn evaluate(self: Dataset) f64 {
+    fn getNLL(self: Dataset) f64 {
+        utilities.zero_array(self._total_pdf_scratch);
+        var expected_events: f64 = 0;
+        var penalty_total: f64 = 0;
         for (self.signals.items) |signal| {
-            const probabilities = try signal.getProbability();
-            _ = probabilities;
+            expected_events += signal.value;
+            const probabilities = signal.getProbability() catch |err| {
+                std.debug.panic("Cannot calculate probabilities for {}, recieved {}", .{ signal, err });
+            };
+            for (probabilities, 0..) |prob, idx| {
+                self._total_pdf_scratch[idx] += signal.value * prob;
+            }
+            penalty_total += penalty(signal.value, signal.expectation, signal.sigma);
         }
+        var total: f64 = 0;
+        for (self._total_pdf_scratch, 0..) |val, idx| {
+            if (self.data_counts[idx] == 0) {
+                continue;
+            }
+            total += self.data_counts[idx] * std.math.log(f64, std.math.e, val);
+        }
+        const nll = -expected_events + total + penalty_total;
+        return nll;
     }
 };

@@ -37,7 +37,7 @@ pub const Systematic = struct {
         } else {
             sys.expectation = options.value;
         }
-        sys.sigma = options.value;
+        sys.sigma = options.sigma;
         sys.applySystematicFn = options.applySystematicFn;
         return sys;
     }
