@@ -3,7 +3,6 @@ const std = @import("std");
 const fit = @import("llfit");
 
 fn scale(sys: *fit.Systematic, sig: *fit.Signal) void {
-    std.debug.print("scaling\n", .{});
     const energies = sig._scratch_points[0];
     for (energies) |*e| {
         e.* *= sys.parameter.value;
@@ -23,27 +22,27 @@ pub fn main() !void {
     const edim = try ppo.addDimension("energy", &.{ 1, 2, 3, 4, 5 });
     const rdim = try ppo.addDimension("radius", &.{ 0, 1000, 2000, 3000 });
     try ppo.addData(&.{
-        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 4.5 } },
-        .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
+        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 3.3, 3.2, 4.2, 4.5 } },
+        .{ .dimension = rdim, .points = &.{ 100, 400, 2000, 1500, 1200, 2500 } },
     });
     const bipo214 = try ppo.addSignal("Bipo214", &.{
-        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 4.5 } },
+        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 1.5 } },
         .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
     });
     const tl208 = try ppo.addSignal("Tl208", &.{
-        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 4.5 } },
+        .{ .dimension = edim, .points = &.{ 3.2, 4.2, 4.5 } },
         .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
     });
     try bipo214.addSystematic(energy_shift);
     try tl208.addSystematic(energy_shift);
-    bipo214.parameter.free = false;
+    try fitter.updateParameters();
     const probs = try bipo214.getProbability();
     std.debug.print("hist: {any}\n", .{probs});
     std.debug.print("data: {any}\n", .{ppo.data_counts});
     std.debug.print("eval: {d}\n", .{fitter.getNLL()});
-    std.debug.print("eval: {d}\n", .{fitter.minimize()});
-    try fitter.updateParameters();
+    std.debug.print("eval: {any}\n", .{try fitter.minimize()});
     for (fitter._parameters.items) |sig| {
         std.debug.print("{s}\n", .{sig.name});
+        std.debug.print("{d}\n", .{sig.value});
     }
 }

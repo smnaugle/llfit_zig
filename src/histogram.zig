@@ -2,6 +2,8 @@ const std = @import("std");
 
 // ND is hard, lets just do everything flat under the hood
 pub const Histogram = struct {
+    const ZERO_PAD = 1e-9;
+
     bins: [][]f64 = &.{},
     nentries: u64 = 0,
     contents: []f64 = &.{},
@@ -9,6 +11,7 @@ pub const Histogram = struct {
     _allocator: std.mem.Allocator = undefined,
     pub const Options = struct {
         density: bool = false,
+        zero_pad: bool = false,
     };
     pub fn init(allocator: std.mem.Allocator, bins: []const []const f64, points: []const []const f64, options: Histogram.Options) !Histogram {
         var hist: Histogram = .{};
@@ -33,10 +36,21 @@ pub const Histogram = struct {
             }
             try hist.addPoint(point);
         }
+        if (options.zero_pad) {
+            hist.zeroPad();
+        }
         if (options.density) {
             try hist.normalize();
         }
         return hist;
+    }
+
+    fn zeroPad(self: *Histogram) void {
+        for (self.contents) |*b| {
+            if (b.* == 0) {
+                b.* = ZERO_PAD;
+            }
+        }
     }
 
     pub fn getBinVolumesOwned(self: Histogram) ![]f64 {

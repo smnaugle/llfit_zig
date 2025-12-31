@@ -10,31 +10,54 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
         std.debug.panic("non-null grad", .{});
     }
     const fit: *llfit.Fit = @ptrCast(@alignCast(fit_ptr));
-    std.debug.print("{s}\n", .{fit.name});
+    for (fit._free.items, 0..) |*param, idx| {
+        param.*.value = xs[idx];
+    }
     _ = opt;
-    _ = xs;
-    return 0;
+    var ret = fit.getNLL();
+
+    if (!std.math.isFinite(ret)) {
+        std.log.warn("nan or inf in likelihood", .{});
+        ret = 1e200;
+    }
+
+    return ret;
 }
 
 pub const FitResult = struct {
     status: i8 = 0,
     value: f64 = 0,
-    xs: []f64 = undefined,
 };
 
-pub fn minimize(fit: *llfit.Fit) f64 {
-    const optimizer = nlopt.nlopt_create(nlopt.NLOPT_LD_LBFGS, 10) orelse {
+pub fn minimize(fit: *llfit.Fit) !FitResult {
+    const optimizer = nlopt.nlopt_create(nlopt.NLOPT_LN_NELDERMEAD, @intCast(fit._free.items.len)) orelse {
         std.debug.panic("Could not get optimizer", .{});
     };
     defer nlopt.nlopt_destroy(optimizer);
 
-    const err = nlopt.nlopt_set_min_objective(optimizer, wrapperNLL, fit);
-    if (err < 0) {
+    if (nlopt.nlopt_set_min_objective(optimizer, wrapperNLL, fit) < 0) {
         std.debug.panic("Could not set optimizer objective function", .{});
     }
 
-    var xs = [_]f64{0.9};
-    const rv = wrapperNLL(@intCast(@intFromPtr(optimizer)), &xs, null, fit);
-
-    return rv;
+    var lbs = try fit._allocator.alloc(f64, fit._free.items.len);
+    defer fit._allocator.free(lbs);
+    var ubs = try fit._allocator.alloc(f64, fit._free.items.len);
+    defer fit._allocator.free(ubs);
+    var xs = try fit._allocator.alloc(f64, fit._free.items.len);
+    defer fit._allocator.free(xs);
+    for (fit._free.items, 0..) |param, idx| {
+        xs[idx] = param.value;
+        lbs[idx] = param.bounds[0];
+        ubs[idx] = param.bounds[1];
+    }
+    if (nlopt.nlopt_set_lower_bounds(optimizer, lbs.ptr) < 0) {
+        std.debug.panic("Could not set lower bounds {any}", .{lbs});
+    }
+    if (nlopt.nlopt_set_upper_bounds(optimizer, ubs.ptr) < 0) {
+        std.debug.panic("Could not set upper bounds {any}", .{ubs});
+    }
+    var res: f64 = 0;
+    const opt_code = nlopt.nlopt_optimize(optimizer, xs.ptr, &res);
+    const fit_result: FitResult = .{ .value = res, .status = @intCast(opt_code) };
+    return fit_result;
 }

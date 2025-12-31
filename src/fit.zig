@@ -95,8 +95,8 @@ pub const Fit = struct {
         return results;
     }
 
-    pub fn minimize(self: *Fit) f64 {
-        return min.minimize(self);
+    pub fn minimize(self: *Fit) !min.FitResult {
+        return try min.minimize(self);
     }
 };
 
@@ -192,7 +192,7 @@ pub const Dataset = struct {
             }
             total += self.data_counts[idx] * std.math.log(f64, std.math.e, val);
         }
-        const nll = -expected_events + total + penalty_total;
+        const nll = expected_events - total + penalty_total;
         return nll;
     }
 };

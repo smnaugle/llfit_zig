@@ -22,7 +22,6 @@ pub fn build(b: *std.Build) void {
     const mod = b.addModule("llfit", .{ .root_source_file = b.path("src/root.zig"), .target = target, .optimize = optimize });
     mod.linkSystemLibrary("nlopt", .{});
     if (has_nlopt_path) {
-        std.debug.print("{s}\n", .{nlopt_inc_path});
         mod.addSystemIncludePath(.{ .cwd_relative = nlopt_inc_path });
     }
     const exe = b.addExecutable(.{
@@ -37,7 +36,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("llfit", mod);
     b.installArtifact(exe);
     if (has_nlopt_path) {
-        std.debug.print("{s}\n", .{nlopt_inc_path});
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = nlopt_inc_path });
     }
 }

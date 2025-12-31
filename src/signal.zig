@@ -74,7 +74,7 @@ pub const Signal = struct {
         for (self.dimensions, 0..) |dim, idx| {
             bins[idx] = try self._allocator.dupe(f64, dim.bins);
         }
-        const hist: fit.Histogram = try .init(self._allocator, bins, points, .{ .density = true });
+        const hist: fit.Histogram = try .init(self._allocator, bins, points, .{ .density = true, .zero_pad = true });
         return hist;
     }
 
