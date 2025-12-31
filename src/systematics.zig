@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Signal = @import("signal.zig").Signal;
 const Dimension = @import("Dimension.zig");
+const Parameter = @import("Parameter.zig");
 
 pub fn noTransform(systematic: *Systematic, signal: *Signal) void {
     _ = signal;
@@ -12,10 +13,8 @@ pub fn noTransform(systematic: *Systematic, signal: *Signal) void {
 const FuncType = *const fn (*Systematic, *Signal) void;
 
 pub const Systematic = struct {
-    name: []const u8 = "",
-    value: f64 = undefined,
-    expectation: f64 = undefined,
-    sigma: f64 = undefined,
+    parameter: Parameter = .{},
+
     dimensions: []const *Dimension = &.{},
     // The systematics can be applied directly to the signal, no need to return anything
     applySystematicFn: FuncType = noTransform,
@@ -30,14 +29,14 @@ pub const Systematic = struct {
     };
     pub fn init(options: SystematicOptions) Systematic {
         var sys = Systematic{};
-        sys.name = options.name;
-        sys.value = options.value;
+        sys.parameter.name = options.name;
+        sys.parameter.value = options.value;
         if (options.expectation) |expectation| {
-            sys.expectation = expectation;
+            sys.parameter.expectation = expectation;
         } else {
-            sys.expectation = options.value;
+            sys.parameter.expectation = options.value;
         }
-        sys.sigma = options.sigma;
+        sys.parameter.sigma = options.sigma;
         sys.applySystematicFn = options.applySystematicFn;
         return sys;
     }

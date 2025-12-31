@@ -2,14 +2,13 @@ const std = @import("std");
 
 const syts = @import("systematics.zig");
 const fit = @import("root.zig");
+const Parameter = @import("Parameter.zig");
 
 // TODO: Implement interface for signals to support binned and KDE PDFs.
 pub const Signal = struct {
-    value: f64 = 1,
-    expectation: f64 = 1,
-    sigma: f64 = std.math.inf(f64),
-    name: []const u8 = "",
+    parameter: Parameter = .{},
 
+    name: []const u8 = undefined,
     input_mc: fit.DataPoints = undefined,
     systematics: std.ArrayList(*syts.Systematic) = .empty,
     needs_binning: bool = true,
@@ -32,6 +31,7 @@ pub const Signal = struct {
             num_bins *= p.dimension.bin_centers.len;
         }
         sig.name = name;
+        sig.parameter.name = name;
         sig.probability = try sig._allocator.alloc(f64, num_bins);
         for (sig.probability) |*c| {
             c.* = 0;
@@ -62,7 +62,7 @@ pub const Signal = struct {
         try self.systematics.append(self._allocator, systematic);
         // Here the value we are appending does not matter as long as it is different, we just need to trigger
         // applying systematics on the first iteration
-        try self._last_systematics.append(self._allocator, systematic.value - 1);
+        try self._last_systematics.append(self._allocator, systematic.parameter.value - 1);
     }
 
     pub fn getOwnedHistogram(self: Signal, points: [][]f64) !fit.Histogram {
@@ -81,8 +81,8 @@ pub const Signal = struct {
     pub fn getProbability(self: *Signal) ![]f64 {
         var rerun: bool = false;
         for (self.systematics.items, 0..) |systematic, idx| {
-            if (systematic.value != self._last_systematics.items[idx]) {
-                self._last_systematics.items[idx] = systematic.value;
+            if (systematic.parameter.value != self._last_systematics.items[idx]) {
+                self._last_systematics.items[idx] = systematic.parameter.value;
                 rerun = true;
             }
         }

@@ -2,6 +2,8 @@ const std = @import("std");
 
 const fit = @import("root.zig");
 const utilities = @import("utilities.zig");
+const min = @import("minimization.zig");
+const Parameter = @import("Parameter.zig");
 
 /// Returns the __negative__ log-likelihood value of a Gaussian penalty term
 fn penalty(value: f64, mean: f64, sigma: f64) f64 {
@@ -11,13 +13,18 @@ fn penalty(value: f64, mean: f64, sigma: f64) f64 {
 pub const Fit = struct {
     name: []const u8 = "",
     datasets: std.ArrayList(*Dataset) = .empty,
+    // name_dataset: std.StringHashMap(*Dataset) = .{},
     systematics: std.ArrayList(*fit.Systematic) = .empty,
 
     _allocator: std.mem.Allocator = undefined,
+    _free: std.ArrayList(*Parameter) = .empty,
+    _fixed: std.ArrayList(*Parameter) = .empty,
+    _parameters: std.ArrayList(*Parameter) = .empty,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) Fit {
         var init_fit = Fit{};
         init_fit.name = name;
         init_fit._allocator = allocator;
+        // init_fit.name_dataset = .init(allocator);
         return init_fit;
     }
 
@@ -33,6 +40,7 @@ pub const Fit = struct {
         const systematic_ptr = try self._allocator.create(fit.Systematic);
         systematic_ptr.* = .init(options);
         try self.systematics.append(self._allocator, systematic_ptr);
+        try self._free.append(self._allocator, &self.systematics.items[self.systematics.items.len - 1].parameter);
         return systematic_ptr;
     }
 
@@ -47,18 +55,48 @@ pub const Fit = struct {
             self._allocator.destroy(systematic);
         }
         self.systematics.deinit(self._allocator);
+        self._free.deinit(self._allocator);
+        self._fixed.deinit(self._allocator);
+        self._parameters.deinit(self._allocator);
         self.* = undefined;
+    }
+
+    fn classifyAndAppendParameter(self: *Fit, param: *Parameter) !void {
+        if (param.free) {
+            try self._free.append(self._allocator, param);
+        } else {
+            try self._fixed.append(self._allocator, param);
+        }
+        try self._parameters.append(self._allocator, param);
+    }
+
+    pub fn updateParameters(self: *Fit) !void {
+        self._free.clearRetainingCapacity();
+        self._fixed.clearRetainingCapacity();
+        self._parameters.clearRetainingCapacity();
+        for (self.systematics.items) |sys| {
+            try classifyAndAppendParameter(self, &sys.parameter);
+        }
+        for (self.datasets.items) |dataset| {
+            for (dataset.signals.items) |sig| {
+                try classifyAndAppendParameter(self, &sig.parameter);
+            }
+        }
     }
 
     pub fn getNLL(self: Fit) f64 {
         var results: f64 = 0;
         for (self.systematics.items) |systematic| {
-            results += penalty(systematic.value, systematic.expectation, systematic.sigma);
+            results += penalty(systematic.parameter.value, systematic.parameter.expectation, systematic.parameter.sigma);
         }
         for (self.datasets.items) |dataset| {
             results += dataset.getNLL();
         }
         return results;
+    }
+
+    pub fn minimize(self: *Fit) f64 {
+        return min.minimize(self);
     }
 };
 
@@ -137,14 +175,15 @@ pub const Dataset = struct {
         var expected_events: f64 = 0;
         var penalty_total: f64 = 0;
         for (self.signals.items) |signal| {
-            expected_events += signal.value;
+            const param = signal.parameter;
+            expected_events += param.value;
             const probabilities = signal.getProbability() catch |err| {
                 std.debug.panic("Cannot calculate probabilities for {}, recieved {}", .{ signal, err });
             };
             for (probabilities, 0..) |prob, idx| {
-                self._total_pdf_scratch[idx] += signal.value * prob;
+                self._total_pdf_scratch[idx] += param.value * prob;
             }
-            penalty_total += penalty(signal.value, signal.expectation, signal.sigma);
+            penalty_total += penalty(param.value, param.expectation, param.sigma);
         }
         var total: f64 = 0;
         for (self._total_pdf_scratch, 0..) |val, idx| {

@@ -6,7 +6,7 @@ fn scale(sys: *fit.Systematic, sig: *fit.Signal) void {
     std.debug.print("scaling\n", .{});
     const energies = sig._scratch_points[0];
     for (energies) |*e| {
-        e.* *= sys.value;
+        e.* *= sys.parameter.value;
     }
 }
 
@@ -30,9 +30,20 @@ pub fn main() !void {
         .{ .dimension = edim, .points = &.{ 1.2, 1.2, 4.5 } },
         .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
     });
+    const tl208 = try ppo.addSignal("Tl208", &.{
+        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 4.5 } },
+        .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
+    });
     try bipo214.addSystematic(energy_shift);
+    try tl208.addSystematic(energy_shift);
+    bipo214.parameter.free = false;
     const probs = try bipo214.getProbability();
     std.debug.print("hist: {any}\n", .{probs});
     std.debug.print("data: {any}\n", .{ppo.data_counts});
     std.debug.print("eval: {d}\n", .{fitter.getNLL()});
+    std.debug.print("eval: {d}\n", .{fitter.minimize()});
+    try fitter.updateParameters();
+    for (fitter._parameters.items) |sig| {
+        std.debug.print("{s}\n", .{sig.name});
+    }
 }
