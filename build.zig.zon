@@ -1,0 +1,11 @@
+.{
+    .name = .llfit,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .paths = .{
+        "build.zig.zon",
+        "build.zig",
+        "src",
+    },
+    .fingerprint = 0x441df7b3281479f1,
+}
