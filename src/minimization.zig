@@ -6,8 +6,11 @@ const nlopt = @cImport({
 });
 
 pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyopaque) callconv(.c) f64 {
-    if (@intFromPtr(grad) != 0) {
+    if (grad != null) {
         std.debug.panic("non-null grad", .{});
+    }
+    if (fit_ptr == null) {
+        std.debug.panic("Null fit information", .{});
     }
     const fit: *llfit.Fit = @ptrCast(@alignCast(fit_ptr));
     for (fit._free.items, 0..) |*param, idx| {
