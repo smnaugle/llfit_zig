@@ -40,7 +40,7 @@ pub fn main() !void {
     std.debug.print("hist: {any}\n", .{probs});
     std.debug.print("data: {any}\n", .{ppo.data_counts});
     std.debug.print("eval: {d}\n", .{fitter.getNLL()});
-    std.debug.print("eval: {any}\n", .{try fitter.minimize()});
+    std.debug.print("eval: {f}\n", .{try fitter.minimize()});
     for (fitter._parameters.items) |sig| {
         std.debug.print("{s}\n", .{sig.name});
         std.debug.print("{d}\n", .{sig.value});

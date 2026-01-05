@@ -29,7 +29,12 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
 
 pub const FitResult = struct {
     status: i8 = 0,
+    status_string: []const u8 = &.{},
     value: f64 = 0,
+
+    pub fn format(self: FitResult, writer: *std.io.Writer) !void {
+        try writer.print("{{status: {d}, status_string: {s}, value: {d}}}", .{ self.status, self.status_string, self.value });
+    }
 };
 
 pub fn minimize(fit: *llfit.Fit) !FitResult {
@@ -61,6 +66,6 @@ pub fn minimize(fit: *llfit.Fit) !FitResult {
     }
     var res: f64 = 0;
     const opt_code = nlopt.nlopt_optimize(optimizer, xs.ptr, &res);
-    const fit_result: FitResult = .{ .value = res, .status = @intCast(opt_code) };
+    const fit_result: FitResult = .{ .value = res, .status = @intCast(opt_code), .status_string = std.mem.span(nlopt.nlopt_result_to_string(opt_code)) };
     return fit_result;
 }
