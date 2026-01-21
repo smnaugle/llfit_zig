@@ -10,23 +10,28 @@ name: []const u8 = "",
 _allocator: mem.Allocator = undefined,
 
 pub fn init(allocator: mem.Allocator, name: []const u8, bins: []const f64) !Dimension {
-    var dim: Dimension = .{};
-    dim._allocator = allocator;
-    dim.name = name;
-    var temp_bins = try allocator.alloc(f64, bins.len);
-    for (0..bins.len) |idx| {
-        temp_bins[idx] = bins[idx];
-    }
-    dim.bins = temp_bins;
-    var temp_bin_centers = try allocator.alloc(f64, bins.len - 1);
+    const owned_name = try allocator.dupe(u8, name);
+    errdefer allocator.free(owned_name);
+
+    const owned_bins = try allocator.dupe(f64, bins);
+    errdefer allocator.free(owned_bins);
+
+    var owned_bin_centers = try allocator.alloc(f64, bins.len - 1);
+    errdefer allocator.free(owned_bin_centers);
     for (0..(bins.len - 1)) |idx| {
-        temp_bin_centers[idx] = (bins[idx] + bins[idx + 1]) / 2;
+        owned_bin_centers[idx] = (bins[idx] + bins[idx + 1]) / 2;
     }
-    dim.bin_centers = temp_bin_centers;
-    return dim;
+
+    return .{
+        ._allocator = allocator,
+        .name = owned_name,
+        .bins = owned_bins,
+        .bin_centers = owned_bin_centers,
+    };
 }
 
-pub fn deinit(self: *Dimension) void {
+pub fn deinit(self: Dimension) void {
+    self._allocator.free(self.name);
     self._allocator.free(self.bins);
     self._allocator.free(self.bin_centers);
 }

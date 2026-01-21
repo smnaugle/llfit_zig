@@ -19,19 +19,19 @@ pub fn main() !void {
     defer fitter.deinit();
     const ppo = try fitter.addDataset("ppo");
     const energy_shift = try fitter.addSystematic(.{ .name = "energy_shift", .value = 1, .expectation = 1.0, .sigma = 0.01, .applySystematicFn = &scale });
-    const edim = try ppo.addDimension("energy", &.{ 1, 2, 3, 4, 5 });
-    const rdim = try ppo.addDimension("radius", &.{ 0, 1000, 2000, 3000 });
+    _ = try ppo.addDimension("energy", &.{ 1, 2, 3, 4, 5 });
+    _ = try ppo.addDimension("radius", &.{ 0, 1000, 2000, 3000 });
     try ppo.addData(&.{
-        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 3.3, 3.2, 4.2, 4.5 } },
-        .{ .dimension = rdim, .points = &.{ 100, 400, 2000, 1500, 1200, 2500 } },
+        .{ .dimension_name = "energy", .points = &.{ 1.2, 1.2, 3.3, 3.2, 4.2, 4.5 } },
+        .{ .dimension_name = "radius", .points = &.{ 100, 400, 2000, 1500, 1200, 2500 } },
     });
     const bipo214 = try ppo.addSignal("Bipo214", &.{
-        .{ .dimension = edim, .points = &.{ 1.2, 1.2, 1.5 } },
-        .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
+        .{ .dimension_name = "energy", .points = &.{ 1.2, 1.2, 1.5 } },
+        .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
     });
     const tl208 = try ppo.addSignal("Tl208", &.{
-        .{ .dimension = edim, .points = &.{ 3.2, 4.2, 4.5 } },
-        .{ .dimension = rdim, .points = &.{ 100, 400, 2500 } },
+        .{ .dimension_name = "energy", .points = &.{ 3.2, 4.2, 4.5 } },
+        .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
     });
     try bipo214.addSystematic(energy_shift);
     try tl208.addSystematic(energy_shift);

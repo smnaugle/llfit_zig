@@ -88,9 +88,11 @@ pub const Fit = struct {
         var results: f64 = 0;
         for (self.systematics.items) |systematic| {
             results += penalty(systematic.parameter.value, systematic.parameter.expectation, systematic.parameter.sigma);
+            std.log.debug("After systematics penalty: {d}", .{results});
         }
         for (self.datasets.items) |dataset| {
             results += dataset.getNLL();
+            std.log.debug("After datasets calculation: {d}", .{results});
         }
         return results;
     }
@@ -105,7 +107,7 @@ pub const Dataset = struct {
     dimensions: std.ArrayList(*fit.Dimension) = .empty,
     signals: std.ArrayList(*fit.Signal) = .empty,
     // "energy": [e1, e2, ...]
-    data: fit.DataPoints = undefined,
+    data: std.StringHashMap([]f64) = undefined,
     data_counts: []f64 = &.{},
     binned_data: []f64 = &.{},
     _total_pdf_scratch: []f64 = &.{},
@@ -130,24 +132,29 @@ pub const Dataset = struct {
             self._allocator.destroy(signal);
         }
         self.signals.deinit(self._allocator);
-        var iter = self.data.valueIterator();
+        var iter = self.data.iterator();
         while (iter.next()) |val| {
-            self._allocator.free(val.*);
+            self._allocator.free(val.key_ptr.*);
+            self._allocator.free(val.value_ptr.*);
         }
+        self.data.deinit();
         self._allocator.free(self.data_counts);
         self._allocator.free(self._total_pdf_scratch);
-        self.data.deinit();
         self.* = undefined;
     }
 
-    pub fn addData(self: *Dataset, data: []const fit.DimensionPoints) !void {
+    pub fn addData(self: *Dataset, data: []const fit.DataPoints) !void {
         var bins = try self._allocator.alloc([]const f64, data.len);
         defer self._allocator.free(bins);
         var points = try self._allocator.alloc([]const f64, data.len);
         defer self._allocator.free(points);
         for (data, 0..) |p, idx| {
-            try self.data.putNoClobber(p.dimension.name, try self._allocator.dupe(f64, p.points));
-            bins[idx] = p.dimension.bins;
+            try self.data.putNoClobber(
+                try self._allocator.dupe(u8, p.dimension_name),
+                try self._allocator.dupe(f64, p.points),
+            );
+            const dimension = try self.getDimension(p.dimension_name);
+            bins[idx] = dimension.bins;
             points[idx] = p.points;
         }
         var hist = try fit.Histogram.init(self._allocator, bins, points, .{ .density = false });
@@ -163,15 +170,34 @@ pub const Dataset = struct {
         return dim_ptr;
     }
 
-    pub fn addSignal(self: *Dataset, name: []const u8, points: []const fit.DimensionPoints) !*fit.Signal {
+    /// Get the names of the dimensions in the dataset. Returns array of
+    /// slices pointing to the names used internally by the struct, so the
+    /// names themselves do not need to be freed, only the retured array. So
+    /// caller must call `allocator.free(returned_array)`;
+    pub fn getDimensionNames(self: Dataset, allocator: std.mem.Allocator) ![]const []const u8 {
+        var names = try allocator.alloc([]const u8, self.dimensions.items.len);
+        for (self.dimensions.items, 0..) |dim, idx| {
+            names[idx] = dim.name;
+        }
+        return names;
+    }
+
+    pub fn getDimension(self: Dataset, name: []const u8) !*fit.Dimension {
+        for (self.dimensions.items) |dim| {
+            if (std.mem.eql(u8, dim.name, name)) return dim;
+        }
+        return error.DimensionNotFound;
+    }
+
+    pub fn addSignal(self: *Dataset, name: []const u8, points: []const fit.DataPoints) !*fit.Signal {
         const signal_ptr = try self._allocator.create(fit.Signal);
-        signal_ptr.* = try .init(self._allocator, name, points);
+        signal_ptr.* = try .init(self._allocator, name, points, self);
         try self.signals.append(self._allocator, signal_ptr);
         return signal_ptr;
     }
 
     fn getNLL(self: Dataset) f64 {
-        utilities.zero_array(self._total_pdf_scratch);
+        utilities.zeroArray(self._total_pdf_scratch);
         var expected_events: f64 = 0;
         var penalty_total: f64 = 0;
         for (self.signals.items) |signal| {

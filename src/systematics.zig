@@ -13,9 +13,11 @@ pub fn noTransform(systematic: *Systematic, signal: *Signal) void {
 const FuncType = *const fn (*Systematic, *Signal) void;
 
 pub const Systematic = struct {
+    name: []const u8 = "",
     parameter: Parameter = .{},
+    /// An optional pointer to allow for the storage of additional state.
+    data: ?*anyopaque = null,
 
-    dimensions: []const *Dimension = &.{},
     // The systematics can be applied directly to the signal, no need to return anything
     applySystematicFn: FuncType = noTransform,
 
@@ -24,11 +26,14 @@ pub const Systematic = struct {
         value: f64 = 1,
         expectation: ?f64 = null,
         sigma: f64 = std.math.inf(f64),
-        dimensions: []const *Dimension = &.{},
+        bounds: [2]f64 = .{ 0, std.math.inf(f64) },
+        free: bool = false,
         applySystematicFn: FuncType = noTransform,
+        data: ?*anyopaque = null,
     };
     pub fn init(options: SystematicOptions) Systematic {
         var sys = Systematic{};
+        sys.name = options.name;
         sys.parameter.name = options.name;
         sys.parameter.value = options.value;
         if (options.expectation) |expectation| {
@@ -37,7 +42,10 @@ pub const Systematic = struct {
             sys.parameter.expectation = options.value;
         }
         sys.parameter.sigma = options.sigma;
+        sys.parameter.bounds = options.bounds;
+        sys.parameter.free = options.free;
         sys.applySystematicFn = options.applySystematicFn;
+        sys.data = options.data;
         return sys;
     }
     pub fn deinit(self: *Systematic) void {

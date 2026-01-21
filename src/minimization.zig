@@ -5,6 +5,8 @@ const nlopt = @cImport({
     @cInclude("nlopt.h");
 });
 
+const count: u64 = 1;
+const MSG_COUNT = 100;
 pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyopaque) callconv(.c) f64 {
     if (grad != null) {
         std.debug.panic("non-null grad", .{});
@@ -13,8 +15,9 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
         std.debug.panic("Null fit information", .{});
     }
     const fit: *llfit.Fit = @ptrCast(@alignCast(fit_ptr));
-    for (fit._free.items, 0..) |*param, idx| {
+    for (fit._free.items, 0..) |param, idx| {
         param.*.value = xs[idx];
+        std.log.debug("Setting {s} to {d}\n", .{ param.name, param.value });
     }
     _ = opt;
     var ret = fit.getNLL();
@@ -24,6 +27,10 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
         ret = 1e200;
     }
 
+    std.log.debug("NLL: {d}", .{ret});
+    if ((count % MSG_COUNT) == 0) {
+        std.log.info("NLL: {d}", .{ret});
+    }
     return ret;
 }
 

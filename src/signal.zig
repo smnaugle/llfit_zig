@@ -9,7 +9,7 @@ pub const Signal = struct {
     parameter: Parameter = .{},
 
     name: []const u8 = undefined,
-    input_mc: fit.DataPoints = undefined,
+    input_mc: std.StringHashMap([]f64) = undefined,
     systematics: std.ArrayList(*syts.Systematic) = .empty,
     needs_binning: bool = true,
     dimensions: []*fit.Dimension = &.{},
@@ -19,17 +19,23 @@ pub const Signal = struct {
     _scratch_points: [][]f64 = &.{},
     _last_systematics: std.ArrayList(f64) = .empty,
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, points: []const fit.DimensionPoints) !Signal {
+    first_iter: bool = true,
+
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, points: []const fit.DataPoints, dataset: *fit.Dataset) !Signal {
         var sig = Signal{};
         sig._allocator = allocator;
         sig.input_mc = .init(allocator);
-        sig.dimensions = try allocator.alloc(*fit.Dimension, points.len);
+        var dimensions: std.ArrayList(*fit.Dimension) = .empty;
         var num_bins: usize = 1;
-        for (points, 0..) |p, idx| {
-            try sig.input_mc.putNoClobber(p.dimension.name, try sig._allocator.dupe(f64, p.points));
-            sig.dimensions[idx] = p.dimension;
-            num_bins *= p.dimension.bin_centers.len;
+        for (points) |p| {
+            try sig.input_mc.putNoClobber(
+                try sig._allocator.dupe(u8, p.dimension_name),
+                try sig._allocator.dupe(f64, p.points),
+            );
+            try dimensions.append(sig._allocator, try dataset.getDimension(p.dimension_name));
+            num_bins *= dimensions.items[dimensions.items.len - 1].bin_centers.len;
         }
+        sig.dimensions = try dimensions.toOwnedSlice(allocator);
         sig.name = name;
         sig.parameter.name = name;
         sig.probability = try sig._allocator.alloc(f64, num_bins);
@@ -42,8 +48,8 @@ pub const Signal = struct {
     pub fn deinit(self: *Signal) void {
         var mc_iter = self.input_mc.iterator();
         while (mc_iter.next()) |it| {
-            const value = it.value_ptr;
-            self._allocator.free(value.*);
+            self._allocator.free(it.key_ptr.*);
+            self._allocator.free(it.value_ptr.*);
         }
         self._allocator.free(self.dimensions);
         self.input_mc.deinit();
@@ -65,7 +71,19 @@ pub const Signal = struct {
         try self._last_systematics.append(self._allocator, systematic.parameter.value - 1);
     }
 
-    pub fn getOwnedHistogram(self: Signal, points: [][]f64) !fit.Histogram {
+    pub fn getOwnedHistogram(self: Signal, points: ?[][]f64, options: fit.Histogram.Options) !fit.Histogram {
+        var need_free = false;
+        var hist_points: [][]f64 = undefined;
+        if (points == null) {
+            hist_points = try self._allocator.alloc([]f64, self.dimensions.len);
+            for (0..self.dimensions.len) |dim_idx| {
+                hist_points[dim_idx] = try self._allocator.dupe(f64, self.input_mc.get(self.dimensions[dim_idx].name).?);
+            }
+            need_free = true;
+        } else {
+            hist_points = points.?;
+        }
+
         var bins: [][]f64 = try self._allocator.alloc([]f64, self.dimensions.len);
         defer self._allocator.free(bins);
         defer for (bins) |*b| {
@@ -74,7 +92,13 @@ pub const Signal = struct {
         for (self.dimensions, 0..) |dim, idx| {
             bins[idx] = try self._allocator.dupe(f64, dim.bins);
         }
-        const hist: fit.Histogram = try .init(self._allocator, bins, points, .{ .density = true, .zero_pad = true });
+        const hist: fit.Histogram = try .init(self._allocator, bins, hist_points, options);
+        if (need_free) {
+            for (hist_points) |hp| {
+                self._allocator.free(hp);
+            }
+            self._allocator.free(hist_points);
+        }
         return hist;
     }
 
@@ -86,7 +110,9 @@ pub const Signal = struct {
                 rerun = true;
             }
         }
+        if (self.first_iter) rerun = true;
         if (rerun) {
+            std.log.debug("Rerunning systematics for {s}", .{self.name});
             self._scratch_points = try self._allocator.alloc([]f64, self.dimensions.len);
             for (0..self.dimensions.len) |dim_idx| {
                 self._scratch_points[dim_idx] = try self._allocator.dupe(f64, self.input_mc.get(self.dimensions[dim_idx].name).?);
@@ -97,7 +123,7 @@ pub const Signal = struct {
             }
         }
         if (self.needs_binning) {
-            var hist = try self.getOwnedHistogram(self._scratch_points);
+            var hist = try self.getOwnedHistogram(self._scratch_points, .{ .density = true, .zero_pad = true, .points_limit = 50000 });
             defer hist.deinit();
             for (hist.contents, 0..) |content, idx| {
                 self.probability[idx] = content;
@@ -111,6 +137,7 @@ pub const Signal = struct {
             }
             self._allocator.free(self._scratch_points);
         }
+        self.first_iter = false;
         return self.probability;
     }
 };

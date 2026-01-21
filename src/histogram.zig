@@ -8,10 +8,13 @@ pub const Histogram = struct {
     nentries: u64 = 0,
     contents: []f64 = &.{},
 
+    scratch_coord: []u64 = &.{},
+
     _allocator: std.mem.Allocator = undefined,
     pub const Options = struct {
         density: bool = false,
         zero_pad: bool = false,
+        points_limit: usize = std.math.maxInt(usize),
     };
     pub fn init(allocator: std.mem.Allocator, bins: []const []const f64, points: []const []const f64, options: Histogram.Options) !Histogram {
         var hist: Histogram = .{};
@@ -28,6 +31,7 @@ pub const Histogram = struct {
         for (hist.contents) |*bin| {
             bin.* = 0;
         }
+        hist.scratch_coord = try hist._allocator.alloc(u64, points.len);
         var point = try hist._allocator.alloc(f64, points.len);
         defer hist._allocator.free(point);
         for (0..points[0].len) |idx| {
@@ -35,6 +39,7 @@ pub const Histogram = struct {
                 point[dim_idx] = points[dim_idx][idx];
             }
             try hist.addPoint(point);
+            if (hist.nentries > options.points_limit) break;
         }
         if (options.zero_pad) {
             hist.zeroPad();
@@ -124,22 +129,30 @@ pub const Histogram = struct {
     }
 
     fn addPoint(self: *Histogram, value: []const f64) !void {
-        var bin_coordinate = try self._allocator.alloc(usize, self.bins.len);
-        defer self._allocator.free(bin_coordinate);
+        // var bin_coordinate = try self._allocator.alloc(usize, self.bins.len);
+        // defer self._allocator.free(bin_coordinate);
         var coord_counts: u64 = 0;
         for (self.bins, 0..) |b, dim_idx| {
-            if (dim_idx == 0) {}
-            for (0..(b.len - 1)) |bin_idx| {
-                if (value[dim_idx] >= b[bin_idx] and value[dim_idx] < b[bin_idx + 1]) {
-                    bin_coordinate[dim_idx] = bin_idx;
-                    coord_counts += 1;
-                }
+            const bin_spacing = b[1] - b[0];
+            const float_coord = (value[dim_idx] - b[0]) / bin_spacing;
+            if (float_coord < 0 or float_coord >= @as(f64, @floatFromInt(b.len - 1))) {
+                return;
             }
+            self.scratch_coord[dim_idx] = @intFromFloat(@trunc(float_coord));
+            coord_counts += 1;
+
+            // if (dim_idx == 0) {}
+            // for (0..(b.len - 1)) |bin_idx| {
+            //     if (value[dim_idx] >= b[bin_idx] and value[dim_idx] < b[bin_idx + 1]) {
+            //         bin_coordinate[dim_idx] = bin_idx;
+            //         coord_counts += 1;
+            //     }
+            // }
         }
-        if (coord_counts != self.bins.len) {
-            return;
-        }
-        const index = try self.coordinateToIndex(bin_coordinate);
+        // if (coord_counts != self.bins.len) {
+        //     return;
+        // }
+        const index = try self.coordinateToIndex(self.scratch_coord);
         self.nentries += 1;
         self.contents[index] += 1;
     }
@@ -150,5 +163,6 @@ pub const Histogram = struct {
         }
         self._allocator.free(self.bins);
         self._allocator.free(self.contents);
+        self._allocator.free(self.scratch_coord);
     }
 };
