@@ -50,6 +50,26 @@ pub const Histogram = struct {
         return hist;
     }
 
+    pub fn loadNewPoints(self: *Histogram, points: []const []const f64, options: Histogram.Options) !void {
+        self.nentries = 0;
+        for (0..self.contents.len) |ci| self.contents[ci] = 0;
+        var point = try self._allocator.alloc(f64, points.len);
+        defer self._allocator.free(point);
+        for (0..points[0].len) |idx| {
+            for (0..points.len) |dim_idx| {
+                point[dim_idx] = points[dim_idx][idx];
+            }
+            try self.addPoint(point);
+            if (self.nentries > options.points_limit) break;
+        }
+        if (options.zero_pad) {
+            self.zeroPad();
+        }
+        if (options.density) {
+            try self.normalize();
+        }
+    }
+
     fn zeroPad(self: *Histogram) void {
         for (self.contents) |*b| {
             if (b.* == 0) {
@@ -76,8 +96,10 @@ pub const Histogram = struct {
     pub fn normalize(self: *Histogram) !void {
         const bin_vols = try self.getBinVolumesOwned();
         defer self._allocator.free(bin_vols);
+        var tot: f64 = 0;
+        for (self.contents) |c| tot += c;
         for (0..bin_vols.len) |idx| {
-            self.contents[idx] = (self.contents[idx] / bin_vols[idx]) / @as(f64, @floatFromInt(self.nentries));
+            self.contents[idx] = (self.contents[idx] / bin_vols[idx]) / tot;
         }
     }
 

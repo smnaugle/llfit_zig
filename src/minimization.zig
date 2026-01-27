@@ -5,7 +5,7 @@ const nlopt = @cImport({
     @cInclude("nlopt.h");
 });
 
-const count: u64 = 1;
+var count: u64 = 1;
 const MSG_COUNT = 100;
 pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyopaque) callconv(.c) f64 {
     if (grad != null) {
@@ -17,7 +17,7 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
     const fit: *llfit.Fit = @ptrCast(@alignCast(fit_ptr));
     for (fit._free.items, 0..) |param, idx| {
         param.*.value = xs[idx];
-        std.log.debug("Setting {s} to {d}\n", .{ param.name, param.value });
+        std.log.debug("Setting {s} to {d}", .{ param.name, param.value });
     }
     _ = opt;
     var ret = fit.getNLL();
@@ -29,8 +29,14 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
 
     std.log.debug("NLL: {d}", .{ret});
     if ((count % MSG_COUNT) == 0) {
+        for (fit._free.items, 0..) |param, idx| {
+            param.*.value = xs[idx];
+            std.log.info("{s} is {d}", .{ param.name, param.value });
+        }
         std.log.info("NLL: {d}", .{ret});
+        count = 1;
     }
+    count += 1;
     return ret;
 }
 
@@ -53,6 +59,8 @@ pub fn minimize(fit: *llfit.Fit) !FitResult {
     if (nlopt.nlopt_set_min_objective(optimizer, wrapperNLL, fit) < 0) {
         std.debug.panic("Could not set optimizer objective function", .{});
     }
+
+    _ = nlopt.nlopt_set_ftol_abs(optimizer, 1e-5);
 
     var lbs = try fit._allocator.alloc(f64, fit._free.items.len);
     defer fit._allocator.free(lbs);
