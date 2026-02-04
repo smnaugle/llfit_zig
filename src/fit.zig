@@ -206,7 +206,6 @@ pub const Dataset = struct {
             const probabilities = signal.getProbability() catch |err| {
                 std.debug.panic("Cannot calculate probabilities for {}, recieved {}", .{ signal, err });
             };
-            std.log.debug("Probablities for {s}: {any}", .{ signal.name, probabilities });
             for (probabilities, 0..) |prob, idx| {
                 self._total_pdf_scratch[idx] += param.value * prob;
             }

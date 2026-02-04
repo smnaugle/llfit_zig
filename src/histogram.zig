@@ -5,10 +5,11 @@ pub const Histogram = struct {
     const ZERO_PAD = 1e-9;
 
     bins: [][]f64 = &.{},
+    bin_volumes: []f64 = &.{},
     nentries: u64 = 0,
     contents: []f64 = &.{},
-
     scratch_coord: []u64 = &.{},
+    scratch_point: []f64 = &.{},
 
     _allocator: std.mem.Allocator = undefined,
     pub const Options = struct {
@@ -31,42 +32,46 @@ pub const Histogram = struct {
         for (hist.contents) |*bin| {
             bin.* = 0;
         }
-        hist.scratch_coord = try hist._allocator.alloc(u64, points.len);
-        var point = try hist._allocator.alloc(f64, points.len);
-        defer hist._allocator.free(point);
-        for (0..points[0].len) |idx| {
-            for (0..points.len) |dim_idx| {
-                point[dim_idx] = points[dim_idx][idx];
+        hist.scratch_coord = try hist._allocator.alloc(u64, bins.len);
+        hist.scratch_point = try hist._allocator.alloc(f64, bins.len);
+        try hist.createBinVolumes();
+        if (points.len != 0) {
+            for (0..points[0].len) |idx| {
+                for (0..points.len) |dim_idx| {
+                    hist.scratch_point[dim_idx] = points[dim_idx][idx];
+                }
+                hist.addPoint(hist.scratch_point);
+                if (hist.nentries > options.points_limit) break;
             }
-            try hist.addPoint(point);
-            if (hist.nentries > options.points_limit) break;
         }
         if (options.zero_pad) {
             hist.zeroPad();
         }
         if (options.density) {
-            try hist.normalize();
+            hist.normalize();
         }
         return hist;
     }
 
-    pub fn loadNewPoints(self: *Histogram, points: []const []const f64, options: Histogram.Options) !void {
+    pub fn loadNewPoints(self: *Histogram, points: []const []const f64, options: Histogram.Options) void {
         self.nentries = 0;
+        if (points.len != self.bins.len) {
+            std.debug.panic("Cannot load histogram with points" ++
+                " of different dimension than bins: {d}, {d}", .{ points.len, self.bins.len });
+        }
         for (0..self.contents.len) |ci| self.contents[ci] = 0;
-        var point = try self._allocator.alloc(f64, points.len);
-        defer self._allocator.free(point);
         for (0..points[0].len) |idx| {
             for (0..points.len) |dim_idx| {
-                point[dim_idx] = points[dim_idx][idx];
+                self.scratch_point[dim_idx] = points[dim_idx][idx];
             }
-            try self.addPoint(point);
+            self.addPoint(self.scratch_point);
             if (self.nentries > options.points_limit) break;
         }
         if (options.zero_pad) {
             self.zeroPad();
         }
         if (options.density) {
-            try self.normalize();
+            self.normalize();
         }
     }
 
@@ -78,34 +83,28 @@ pub const Histogram = struct {
         }
     }
 
-    pub fn getBinVolumesOwned(self: Histogram) ![]f64 {
-        var bin_vols = try self._allocator.alloc(f64, self.contents.len);
+    fn createBinVolumes(self: *Histogram) !void {
+        self.bin_volumes = try self._allocator.alloc(f64, self.contents.len);
         for (0..self.contents.len) |idx| {
-            bin_vols[idx] = 1;
-            const coord = try self.flatIndexToOwnedBin(idx);
-            defer self._allocator.free(coord);
+            self.bin_volumes[idx] = 1;
+            const coord = try self.flatIndexToBin(idx);
             for (0..self.bins.len) |dim_idx| {
                 const bin_low = (self.bins[dim_idx])[coord[dim_idx]];
                 const bin_high = (self.bins[dim_idx])[coord[dim_idx] + 1];
-                bin_vols[idx] *= (bin_high - bin_low);
+                self.bin_volumes[idx] *= (bin_high - bin_low);
             }
         }
-        return bin_vols;
     }
 
-    pub fn normalize(self: *Histogram) !void {
-        const bin_vols = try self.getBinVolumesOwned();
-        defer self._allocator.free(bin_vols);
-        var tot: f64 = 0;
-        for (self.contents) |c| tot += c;
-        for (0..bin_vols.len) |idx| {
-            self.contents[idx] = (self.contents[idx] / bin_vols[idx]) / tot;
+    pub fn normalize(self: *Histogram) void {
+        const tot: f64 = self.integral();
+        for (0..self.contents.len) |idx| {
+            self.contents[idx] = (self.contents[idx]) / tot;
         }
     }
 
-    pub fn integral(self: Histogram) !f64 {
-        const bin_vols = try self.getBinVolumesOwned();
-        defer self._allocator.free(bin_vols);
+    pub fn integral(self: Histogram) f64 {
+        const bin_vols = self.bin_volumes;
         var sum: f64 = 0;
         for (0..bin_vols.len) |idx| {
             sum += self.contents[idx] * bin_vols[idx];
@@ -113,24 +112,23 @@ pub const Histogram = struct {
         return sum;
     }
 
-    pub fn flatIndexToOwnedBin(self: Histogram, idx: usize) ![]usize {
+    pub fn flatIndexToBin(self: Histogram, idx: usize) ![]usize {
         if (idx > self.contents.len) {
             std.log.warn("Trying to access a bin out of the range of _flat_counts: {} and {}", .{ idx, self.contents.len });
             return error.BinOutOfRange;
         }
-        var coordinate = try self._allocator.alloc(usize, self.bins.len);
         for (self.bins, 0..) |b, dim_idx| {
             if (dim_idx == 0) {
-                coordinate[dim_idx] = idx % (b.len - 1);
+                self.scratch_coord[dim_idx] = idx % (b.len - 1);
             } else {
                 var bins_to_cover: usize = 1;
                 for (0..dim_idx) |remaining_dim_idx| {
                     bins_to_cover *= (self.bins[remaining_dim_idx].len - 1);
                 }
-                coordinate[dim_idx] = @divFloor(idx, bins_to_cover) % (b.len - 1);
+                self.scratch_coord[dim_idx] = @divFloor(idx, bins_to_cover) % (b.len - 1);
             }
         }
-        return coordinate;
+        return self.scratch_coord;
     }
 
     pub fn coordinateToIndex(self: Histogram, coordinate: []const usize) !usize {
@@ -150,7 +148,7 @@ pub const Histogram = struct {
         return idx;
     }
 
-    fn addPoint(self: *Histogram, value: []const f64) !void {
+    fn addPoint(self: *Histogram, value: []const f64) void {
         // var bin_coordinate = try self._allocator.alloc(usize, self.bins.len);
         // defer self._allocator.free(bin_coordinate);
         var coord_counts: u64 = 0;
@@ -174,7 +172,10 @@ pub const Histogram = struct {
         // if (coord_counts != self.bins.len) {
         //     return;
         // }
-        const index = try self.coordinateToIndex(self.scratch_coord);
+        const index = self.coordinateToIndex(self.scratch_coord) catch |err| {
+            std.log.err("{}\n", .{err});
+            std.debug.panic("Cannot convert coordinate to index {any}\n", .{self.scratch_coord});
+        };
         self.nentries += 1;
         self.contents[index] += 1;
     }
@@ -184,7 +185,9 @@ pub const Histogram = struct {
             self._allocator.free(b.*);
         }
         self._allocator.free(self.bins);
+        self._allocator.free(self.bin_volumes);
         self._allocator.free(self.contents);
         self._allocator.free(self.scratch_coord);
+        self._allocator.free(self.scratch_point);
     }
 };

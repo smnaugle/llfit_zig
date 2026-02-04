@@ -60,7 +60,10 @@ pub fn minimize(fit: *llfit.Fit) !FitResult {
         std.debug.panic("Could not set optimizer objective function", .{});
     }
 
-    _ = nlopt.nlopt_set_ftol_abs(optimizer, 1e-5);
+    if (nlopt.nlopt_set_ftol_abs(optimizer, 1e-5) < 0) {
+        std.debug.panic("Could not set convergence tolerance", .{});
+    }
+    // _ = nlopt.nlopt_set_maxeval(optimizer, 10);
 
     var lbs = try fit._allocator.alloc(f64, fit._free.items.len);
     defer fit._allocator.free(lbs);

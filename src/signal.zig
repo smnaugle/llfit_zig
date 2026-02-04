@@ -13,9 +13,14 @@ pub const Signal = struct {
     systematics: std.ArrayList(*syts.Systematic) = .empty,
     needs_binning: bool = true,
     dimensions: []*fit.Dimension = &.{},
+    /// Bins to buffer in each dimension
+    buffer_bins: []u32 = &.{},
+    // Maybe just a slice of histogram contents now?
+    probability: []f64 = &.{},
+    histogram: fit.Histogram = undefined,
+    buffered_histogram: fit.Histogram = undefined,
 
     _allocator: std.mem.Allocator = undefined,
-    probability: []f64 = &.{},
     _scratch_points: [][]f64 = &.{},
     _last_systematics: std.ArrayList(f64) = .empty,
 
@@ -39,9 +44,17 @@ pub const Signal = struct {
         sig.name = name;
         sig.parameter.name = name;
         sig.probability = try sig._allocator.alloc(f64, num_bins);
+        sig._scratch_points = try sig._allocator.alloc([]f64, sig.dimensions.len);
+        // TODO: Check if the points are all the same length and does not have zero length
+        for (0..sig._scratch_points.len) |idx| {
+            sig._scratch_points[idx] = try sig._allocator.alloc(f64, points[0].points.len);
+        }
         for (sig.probability) |*c| {
             c.* = 0;
         }
+        var bins = try allocator.alloc([]const f64, sig.dimensions.len);
+        for (0..bins.len) |idx| bins[idx] = sig.dimensions[idx].bins;
+        sig.histogram = try .init(allocator, bins, &.{}, .{});
         return sig;
     }
 
@@ -51,11 +64,16 @@ pub const Signal = struct {
             self._allocator.free(it.key_ptr.*);
             self._allocator.free(it.value_ptr.*);
         }
-        self._allocator.free(self.dimensions);
         self.input_mc.deinit();
+        for (self._scratch_points) |*sp| {
+            self._allocator.free(sp.*);
+        }
+        self._allocator.free(self._scratch_points);
+        self._allocator.free(self.dimensions);
         self.systematics.deinit(self._allocator);
         self._last_systematics.deinit(self._allocator);
         self._allocator.free(self.probability);
+        self.histogram.deinit();
     }
 
     /// Add a systematic effect to the signal
@@ -112,30 +130,25 @@ pub const Signal = struct {
         }
         if (self.first_iter) rerun = true;
         if (rerun) {
-            std.log.debug("Rerunning systematics for {s}", .{self.name});
-            self._scratch_points = try self._allocator.alloc([]f64, self.dimensions.len);
-            for (0..self.dimensions.len) |dim_idx| {
-                self._scratch_points[dim_idx] = try self._allocator.dupe(f64, self.input_mc.get(self.dimensions[dim_idx].name).?);
-            }
             self.needs_binning = true;
+            std.log.debug("Rerunning systematics for {s}", .{self.name});
+            for (0..self.dimensions.len) |dim_idx| {
+                for (0..self._scratch_points[dim_idx].len) |p_idx| {
+                    self._scratch_points[dim_idx][p_idx] = self.input_mc.get(self.dimensions[dim_idx].name).?[p_idx];
+                }
+            }
             for (self.systematics.items) |systematic| {
                 systematic.applySystematic(self);
             }
         }
+        // Need to check needs_binning here since certain systematics might
+        // already rebin the points
         if (self.needs_binning) {
-            var hist = try self.getOwnedHistogram(self._scratch_points, .{ .density = true, .zero_pad = true, .points_limit = 50000 });
-            defer hist.deinit();
-            for (hist.contents, 0..) |content, idx| {
+            self.histogram.loadNewPoints(self._scratch_points, .{ .density = true, .zero_pad = true, .points_limit = 50000 });
+            for (self.histogram.contents, 0..) |content, idx| {
                 self.probability[idx] = content;
             }
             self.needs_binning = false;
-        }
-        if (rerun) {
-            // Now free the scrath points
-            for (self._scratch_points) |*pts| {
-                self._allocator.free(pts.*);
-            }
-            self._allocator.free(self._scratch_points);
         }
         self.first_iter = false;
         return self.probability;
