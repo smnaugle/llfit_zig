@@ -15,7 +15,7 @@ pub fn main() !void {
         std.debug.print("Memory leak...\n", .{});
     };
     const allocator = gpa.allocator();
-    var fitter: fit.Fit = .init(allocator, "fit");
+    var fitter: fit.Fit = try .init(allocator, "fit");
     defer fitter.deinit();
     const ppo = try fitter.addDataset("ppo");
     const energy_shift = try fitter.addSystematic(.{ .name = "energy_shift", .value = 1, .expectation = 1.0, .sigma = 0.01, .applySystematicFn = &scale });

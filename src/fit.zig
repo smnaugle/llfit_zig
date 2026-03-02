@@ -20,9 +20,9 @@ pub const Fit = struct {
     _free: std.ArrayList(*Parameter) = .empty,
     _fixed: std.ArrayList(*Parameter) = .empty,
     _parameters: std.ArrayList(*Parameter) = .empty,
-    pub fn init(allocator: std.mem.Allocator, name: []const u8) Fit {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8) !Fit {
         var init_fit = Fit{};
-        init_fit.name = name;
+        init_fit.name = try allocator.dupe(u8, name);
         init_fit._allocator = allocator;
         // init_fit.name_dataset = .init(allocator);
         return init_fit;
@@ -45,6 +45,7 @@ pub const Fit = struct {
     }
 
     pub fn deinit(self: *Fit) void {
+        self._allocator.free(self.name);
         for (self.datasets.items) |dataset| {
             dataset.*.deinit();
             self._allocator.destroy(dataset);

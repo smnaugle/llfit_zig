@@ -13,6 +13,7 @@ pub const Signal = struct {
     systematics: std.ArrayList(*syts.Systematic) = .empty,
     needs_binning: bool = true,
     dimensions: []*fit.Dimension = &.{},
+    dataset: *fit.Dataset = undefined,
     /// Bins to buffer in each dimension
     buffer_bins: []u32 = &.{},
     // Maybe just a slice of histogram contents now?
@@ -29,6 +30,7 @@ pub const Signal = struct {
     pub fn init(allocator: std.mem.Allocator, name: []const u8, points: []const fit.DataPoints, dataset: *fit.Dataset) !Signal {
         var sig = Signal{};
         sig._allocator = allocator;
+        sig.dataset = dataset;
         sig.input_mc = .init(allocator);
         var dimensions: std.ArrayList(*fit.Dimension) = .empty;
         var num_bins: usize = 1;
