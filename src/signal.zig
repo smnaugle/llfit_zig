@@ -55,6 +55,7 @@ pub const Signal = struct {
             c.* = 0;
         }
         var bins = try allocator.alloc([]const f64, sig.dimensions.len);
+        defer allocator.free(bins);
         for (0..bins.len) |idx| bins[idx] = sig.dimensions[idx].bins;
         sig.histogram = try .init(allocator, bins, &.{}, .{});
         return sig;
@@ -154,5 +155,22 @@ pub const Signal = struct {
         }
         self.first_iter = false;
         return self.probability;
+    }
+
+    pub fn format(
+        self: @This(),
+        writer: *std.io.Writer,
+    ) !void {
+        const temp_allocator = std.heap.page_allocator;
+        var local_writer: std.io.Writer.Allocating = .init(temp_allocator);
+        defer local_writer.deinit();
+        _ = try local_writer.writer.print("{s}:\n", .{self.name});
+        _ = try local_writer.writer.print("\tvalue: {d}\n", .{self.parameter.value});
+        _ = try local_writer.writer.print("\tsigma: {d}\n", .{self.parameter.sigma});
+        _ = try local_writer.writer.print("\texpectation: {d}\n", .{self.parameter.expectation});
+        _ = try local_writer.writer.print("\tfree: {any}", .{self.parameter.free});
+        _ = try writer.write(local_writer.toOwnedSlice() catch |err| {
+            std.debug.panic("Could not print: {any}", .{err});
+        });
     }
 };
