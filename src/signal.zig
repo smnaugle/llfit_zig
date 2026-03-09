@@ -157,10 +157,7 @@ pub const Signal = struct {
         return self.probability;
     }
 
-    pub fn format(
-        self: @This(),
-        writer: *std.io.Writer,
-    ) !void {
+    pub fn format(self: @This(), writer: *std.io.Writer) !void {
         const temp_allocator = std.heap.page_allocator;
         var local_writer: std.io.Writer.Allocating = .init(temp_allocator);
         defer local_writer.deinit();
