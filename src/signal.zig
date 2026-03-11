@@ -147,7 +147,7 @@ pub const Signal = struct {
         // Need to check needs_binning here since certain systematics might
         // already rebin the points
         if (self.needs_binning) {
-            self.histogram.loadNewPoints(self._scratch_points, .{ .density = true, .zero_pad = true, .points_limit = 50000 });
+            self.histogram.loadNewPoints(self._scratch_points, .{ .density = true, .zero_pad = true, .points_limit = std.math.maxInt(usize) });
             for (self.histogram.contents, 0..) |content, idx| {
                 self.probability[idx] = content;
             }
