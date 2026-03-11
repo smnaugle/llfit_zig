@@ -8,4 +8,10 @@
         "src",
     },
     .fingerprint = 0x441df7b3281479f1,
+    .dependencies = .{
+        .nlopt = .{
+            .url = "https://github.com/stevengj/nlopt/archive/refs/tags/v2.10.1.tar.gz",
+            .hash = "N-V-__8AAI98PgCVQKJMHm3VFKqxvz1zwHYN2pAHSPYmf2eI", 
+        },
+    },
 }
