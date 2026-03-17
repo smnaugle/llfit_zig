@@ -25,14 +25,22 @@ pub fn main() !void {
         .{ .dimension_name = "energy", .points = &.{ 1.2, 1.2, 3.3, 3.2, 4.2, 4.5 } },
         .{ .dimension_name = "radius", .points = &.{ 100, 400, 2000, 1500, 1200, 2500 } },
     });
-    const bipo214 = try ppo.addSignal("Bipo214", &.{
-        .{ .dimension_name = "energy", .points = &.{ 1.2, 1.2, 1.5 } },
-        .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
-    });
-    const tl208 = try ppo.addSignal("Tl208", &.{
-        .{ .dimension_name = "energy", .points = &.{ 3.2, 4.2, 4.5 } },
-        .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
-    });
+    const bipo214 = try ppo.addSignal(
+        "Bipo214",
+        &.{
+            .{ .dimension_name = "energy", .points = &.{ 1.2, 1.2, 1.5 } },
+            .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
+        },
+        .{ .density = true },
+    );
+    const tl208 = try ppo.addSignal(
+        "Tl208",
+        &.{
+            .{ .dimension_name = "energy", .points = &.{ 3.2, 4.2, 4.5 } },
+            .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
+        },
+        .{ .density = true },
+    );
     try bipo214.addSystematic(energy_shift);
     try tl208.addSystematic(energy_shift);
     try fitter.updateParameters();

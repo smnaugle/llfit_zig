@@ -25,7 +25,13 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
 
     if (!std.math.isFinite(ret)) {
         std.log.warn("nan or inf in likelihood", .{});
-        ret = 1e200;
+        for (fit._free.items) |param| {
+            std.log.warn("{s} is {d}", .{ param.name, param.value });
+        }
+        for (fit.datasets.items) |dataset| {
+            std.log.warn("Probabilities for {s}: {any}", .{ dataset.name, dataset._total_pdf_scratch });
+            ret = 1e200;
+        }
     }
 
     std.log.debug("NLL: {d}", .{ret});
@@ -68,10 +74,10 @@ pub const SimpleOptimizer = struct {
     fit: *llfit.Fit,
     optimizer_name: []const u8,
     maxeval: usize = 0,
-    ftol_abs: f64 = 1e-5,
-    xtol_abs: f64 = 1e-5,
-    ftol_rel: f64 = 1e-5,
-    xtol_rel: f64 = 1e-5,
+    ftol_abs: ?f64 = 1e-4,
+    xtol_abs: ?f64 = null,
+    ftol_rel: ?f64 = null,
+    xtol_rel: ?f64 = null,
 
     fn allocError(err: anytype) noreturn {
         std.debug.panic("Allocator error: {any}\n", .{err});
@@ -91,11 +97,19 @@ pub const SimpleOptimizer = struct {
             std.debug.panic("Could not set optimizer objective function", .{});
         }
 
-        if (nlopt.nlopt_set_ftol_rel(opt, self.ftol_rel) < 0) {
+        if (self.ftol_abs != null and nlopt.nlopt_set_ftol_abs(opt, self.ftol_abs.?) < 0) {
             std.debug.panic("Could not set convergence tolerance", .{});
         }
 
-        if (nlopt.nlopt_set_xtol_rel(opt, self.xtol_rel) < 0) {
+        if (self.xtol_abs != null and nlopt.nlopt_set_xtol_abs1(opt, self.xtol_abs.?) < 0) {
+            std.debug.panic("Could not set convergence tolerance", .{});
+        }
+
+        if (self.ftol_rel != null and nlopt.nlopt_set_ftol_rel(opt, self.ftol_rel.?) < 0) {
+            std.debug.panic("Could not set convergence tolerance", .{});
+        }
+
+        if (self.xtol_rel != null and nlopt.nlopt_set_xtol_rel(opt, self.xtol_rel.?) < 0) {
             std.debug.panic("Could not set convergence tolerance", .{});
         }
 

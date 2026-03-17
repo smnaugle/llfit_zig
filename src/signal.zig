@@ -18,6 +18,9 @@ pub const Signal = struct {
     buffer_bins: []u32 = &.{},
     // Maybe just a slice of histogram contents now?
     probability: []f64 = &.{},
+
+    histogram_options: fit.Histogram.Options = .{ .zero_pad = 0.5, .density = true },
+    original_histogram: fit.Histogram = undefined,
     histogram: fit.Histogram = undefined,
     buffered_histogram: fit.Histogram = undefined,
 
@@ -27,7 +30,13 @@ pub const Signal = struct {
 
     first_iter: bool = true,
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, points: []const fit.DataPoints, dataset: *fit.Dataset) !Signal {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        points: []const fit.DataPoints,
+        dataset: *fit.Dataset,
+        options: fit.Histogram.Options,
+    ) !Signal {
         var sig = Signal{};
         sig._allocator = allocator;
         sig.dataset = dataset;
@@ -54,10 +63,19 @@ pub const Signal = struct {
         for (sig.probability) |*c| {
             c.* = 0;
         }
+        for (0..sig.dimensions.len) |dim_idx| {
+            for (0..sig._scratch_points[dim_idx].len) |p_idx| {
+                const input_points = sig.input_mc.get(sig.dimensions[dim_idx].name).?;
+                sig._scratch_points[dim_idx][p_idx] = input_points[p_idx];
+            }
+        }
         var bins = try allocator.alloc([]const f64, sig.dimensions.len);
         defer allocator.free(bins);
+        sig.histogram_options = options;
         for (0..bins.len) |idx| bins[idx] = sig.dimensions[idx].bins;
-        sig.histogram = try .init(allocator, bins, &.{}, .{});
+        sig.histogram = try .init(allocator, bins, sig._scratch_points, sig.histogram_options);
+        sig.original_histogram = try .init(allocator, bins, sig._scratch_points, sig.histogram_options);
+        sig.histogram.options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
         return sig;
     }
 
@@ -77,14 +95,15 @@ pub const Signal = struct {
         self._last_systematics.deinit(self._allocator);
         self._allocator.free(self.probability);
         self.histogram.deinit();
+        self.original_histogram.deinit();
     }
 
     /// Add a systematic effect to the signal
     ///
     /// Systematics are applied in the order they are added to the signal.
-    /// If a systematic bins the data, ie a resolution systematic, it must be
-    /// added last and it __must__ bin the data and then set the `Signal.needs_binning`
-    /// flag to false.
+    ///
+    /// Currently systematics are expected to be applied to the binned signal,
+    /// so they should act on the histogram member variable
     pub fn addSystematic(self: *Signal, systematic: *syts.Systematic) !void {
         try self.systematics.append(self._allocator, systematic);
         // Here the value we are appending does not matter as long as it is different, we just need to trigger
@@ -131,28 +150,23 @@ pub const Signal = struct {
                 rerun = true;
             }
         }
-        if (self.first_iter) rerun = true;
+        if (self.first_iter) {
+            rerun = true;
+        }
         if (rerun) {
-            self.needs_binning = true;
+            // Reset histogram when running systematics
+            self.histogram.deinit();
+            self.histogram = try self.original_histogram.clone(self._allocator);
             std.log.debug("Rerunning systematics for {s}", .{self.name});
-            for (0..self.dimensions.len) |dim_idx| {
-                for (0..self._scratch_points[dim_idx].len) |p_idx| {
-                    self._scratch_points[dim_idx][p_idx] = self.input_mc.get(self.dimensions[dim_idx].name).?[p_idx];
-                }
-            }
             for (self.systematics.items) |systematic| {
                 systematic.applySystematic(self);
             }
         }
-        // Need to check needs_binning here since certain systematics might
-        // already rebin the points
-        if (self.needs_binning) {
-            self.histogram.loadNewPoints(self._scratch_points, .{ .density = true, .zero_pad = true, .points_limit = std.math.maxInt(usize) });
-            for (self.histogram.contents, 0..) |content, idx| {
-                self.probability[idx] = content;
-            }
-            self.needs_binning = false;
+        self.histogram.zeroPad(self.histogram.options.zero_pad.?);
+        if (self.histogram.options.density) {
+            self.histogram.normalize();
         }
+        @memcpy(self.probability, self.histogram.contents);
         self.first_iter = false;
         return self.probability;
     }

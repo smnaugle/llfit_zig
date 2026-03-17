@@ -2,21 +2,23 @@ const std = @import("std");
 
 // ND is hard, lets just do everything flat under the hood
 pub const Histogram = struct {
-    const ZERO_PAD = 1e-9;
-
     bins: [][]f64 = &.{},
     bin_volumes: []f64 = &.{},
     nentries: u64 = 0,
     contents: []f64 = &.{},
     scratch_coord: []u64 = &.{},
     scratch_point: []f64 = &.{},
+    options: Options = .{},
 
+    // FIXME: Think about how to handle zeropad
     _allocator: std.mem.Allocator = undefined,
+
     pub const Options = struct {
         density: bool = false,
-        zero_pad: bool = false,
+        zero_pad: ?f64 = null,
         points_limit: usize = std.math.maxInt(usize),
     };
+
     pub fn init(allocator: std.mem.Allocator, bins: []const []const f64, points: []const []const f64, options: Histogram.Options) !Histogram {
         var hist: Histogram = .{};
         hist._allocator = allocator;
@@ -44,13 +46,27 @@ pub const Histogram = struct {
                 if (hist.nentries > options.points_limit) break;
             }
         }
-        if (options.zero_pad) {
-            hist.zeroPad();
+        hist.options = options;
+        if (options.zero_pad) |pad| {
+            hist.zeroPad(pad);
         }
         if (options.density) {
             hist.normalize();
         }
         return hist;
+    }
+
+    pub fn clone(self: Histogram, allocator: std.mem.Allocator) !Histogram {
+        var copy: Histogram = try .init(allocator, self.bins, &.{}, self.options);
+        @memcpy(copy.bin_volumes, self.bin_volumes);
+        @memcpy(copy.contents, self.contents);
+        copy.nentries = self.nentries;
+        copy.options = self.options;
+        const og_int = self.integral();
+        if (!std.math.approxEqAbs(f64, og_int, copy.integral(), std.math.floatEpsAt(f64, og_int))) {
+            std.log.err("Copy with different integral: {d} vs {d}", .{ og_int, copy.integral() });
+        }
+        return copy;
     }
 
     pub fn loadNewPoints(self: *Histogram, points: []const []const f64, options: Histogram.Options) void {
@@ -67,18 +83,18 @@ pub const Histogram = struct {
             self.addPoint(self.scratch_point);
             if (self.nentries > options.points_limit) break;
         }
-        if (options.zero_pad) {
-            self.zeroPad();
+        if (options.zero_pad) |pad| {
+            self.zeroPad(pad);
         }
         if (options.density) {
             self.normalize();
         }
     }
 
-    fn zeroPad(self: *Histogram) void {
+    pub fn zeroPad(self: *Histogram, pad: f64) void {
         for (self.contents) |*b| {
             if (b.* == 0) {
-                b.* = ZERO_PAD;
+                b.* = pad;
             }
         }
     }

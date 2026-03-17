@@ -5,6 +5,8 @@ const utilities = @import("utilities.zig");
 const min = @import("minimization.zig");
 const Parameter = @import("Parameter.zig");
 
+const fitlog = std.log.scoped(.llfit);
+
 /// Returns the __negative__ log-likelihood value of a Gaussian penalty term
 fn penalty(value: f64, mean: f64, sigma: f64) f64 {
     return 0.5 * std.math.pow(f64, (value - mean) / sigma, 2);
@@ -161,6 +163,8 @@ pub const Fit = struct {
             state.deinit();
         }
 
+        param.free = false;
+        try self.updateParameters();
         const original_value = param.value;
         if (param.value > 3) {
             step_size = std.math.sqrt(param.value);
@@ -172,7 +176,7 @@ pub const Fit = struct {
         var num_iter: u16 = 0;
         while (nll - fitresult.value < 2) {
             if (num_iter > 16) {
-                std.log.err("Could not find parameter scan range", .{});
+                std.log.warn("Could not find parameter scan range", .{});
                 break;
             }
             step_size *= 2;
@@ -196,19 +200,22 @@ pub const Fit = struct {
                     } else {
                         param.value = param.bounds[0];
                     }
-                    std.log.err("Reached bound for {s} with {d}\n", .{ param.name, param.value });
+                    std.log.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
                     break;
                 }
             }
             const new_min = self.minimize(optimizer);
             nll = new_min.value;
-            std.debug.print("On bound step: {d}, {d}\n", .{ param.value, nll });
             num_iter += 1;
+            for (self._free.items) |p| {
+                const param_state = state.get(p.name).?;
+                p.value = param_state.value;
+            }
         }
         num_iter = 0;
         while (nll - fitresult.value > 4) {
             if (num_iter > 16) {
-                std.log.err("Could not find parameter scan range", .{});
+                std.log.warn("Could not find parameter scan range", .{});
                 break;
             }
             step_size /= 2;
@@ -218,13 +225,16 @@ pub const Fit = struct {
                 param.value = original_value - step_size;
             }
             if (param.value < param.bounds[0] or param.value > param.bounds[1]) {
-                std.log.err("Reached bound for {s} with {d}\n", .{ param.name, param.value });
+                std.log.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
                 break;
             }
             const new_min = self.minimize(optimizer);
             nll = new_min.value;
             num_iter += 1;
-            std.debug.print("On bound step: {d}, {d}\n", .{ param.value, nll });
+            for (self._free.items) |p| {
+                const param_state = state.get(p.name).?;
+                p.value = param_state.value;
+            }
         }
         const return_val = param.value;
         param.value = original_value;
@@ -268,24 +278,23 @@ pub const Fit = struct {
         if (options.range == null) {
             bounds[0] = try self.getParameterScanBound(param, optimize, fitresult, false);
             bounds[1] = try self.getParameterScanBound(param, optimize, fitresult, true);
+            std.log.info("Bounds from scan: {d}, {d}", .{ bounds[0], bounds[1] });
         } else {
             bounds[0] = options.range.?[0];
             bounds[1] = options.range.?[1];
         }
 
-        std.debug.print("bounds: {d}, {d}\n", .{ bounds[0], bounds[1] });
         for (0..options.steps) |idx| {
-            std.debug.print("on step {d} out of {d}\n", .{ idx, options.steps });
+            std.log.info("On step {d} out of {d}", .{ idx, options.steps });
             const x = bounds[0] + @as(f64, @floatFromInt(idx)) * (bounds[1] - bounds[0]) / @as(f64, @floatFromInt(options.steps));
             xs[idx] = x;
             param.value = x;
-            std.debug.print("{s} is {d}\n", .{ param.name, param.value });
             const scan_result = self.minimize(optimize);
             for (self._free.items) |p| {
-                std.debug.print("{s}: {d}\n", .{ p.name, p.value });
                 p.value = state.get(p.name).?.value;
             }
             dnlls[idx] = scan_result.value - fitresult.value;
+            std.log.info("delta_nll is {d}", .{dnlls[idx]});
         }
         return .{ xs, dnlls };
     }
@@ -378,9 +387,14 @@ pub const Dataset = struct {
         return error.DimensionNotFound;
     }
 
-    pub fn addSignal(self: *Dataset, name: []const u8, points: []const fit.DataPoints) !*fit.Signal {
+    pub fn addSignal(
+        self: *Dataset,
+        name: []const u8,
+        points: []const fit.DataPoints,
+        options: fit.Histogram.Options,
+    ) !*fit.Signal {
         const signal_ptr = try self._allocator.create(fit.Signal);
-        signal_ptr.* = try .init(self._allocator, name, points, self);
+        signal_ptr.* = try .init(self._allocator, name, points, self, options);
         try self.signals.append(self._allocator, signal_ptr);
         return signal_ptr;
     }
@@ -393,13 +407,14 @@ pub const Dataset = struct {
             const param = signal.parameter;
             expected_events += param.value;
             const probabilities = signal.getProbability() catch |err| {
-                std.debug.panic("Cannot calculate probabilities for {}, recieved {}", .{ signal, err });
+                std.debug.panic("Cannot calculate probabilities for {f}, recieved {any}", .{ signal, err });
             };
             for (probabilities, 0..) |prob, idx| {
                 self._total_pdf_scratch[idx] += param.value * prob;
             }
             penalty_total += penalty(param.value, param.expectation, param.sigma);
         }
+        fitlog.debug("{any}\n", .{self._total_pdf_scratch});
         var total: f64 = 0;
         for (self._total_pdf_scratch, 0..) |val, idx| {
             if (self.data_counts[idx] == 0) {
