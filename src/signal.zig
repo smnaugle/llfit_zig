@@ -3,6 +3,7 @@ const std = @import("std");
 const syts = @import("systematics.zig");
 const fit = @import("root.zig");
 const Parameter = @import("Parameter.zig");
+const utilities = @import("utilities.zig");
 
 // TODO: Implement interface for signals to support binned and KDE PDFs.
 pub const Signal = struct {
@@ -15,14 +16,15 @@ pub const Signal = struct {
     dimensions: []*fit.Dimension = &.{},
     dataset: *fit.Dataset = undefined,
     /// Bins to buffer in each dimension
-    buffer_bins: []u32 = &.{},
+    buffer_bins: [][2]u32 = undefined,
     // Maybe just a slice of histogram contents now?
     probability: []f64 = &.{},
 
-    histogram_options: fit.Histogram.Options = .{ .zero_pad = 0.5, .density = true },
+    options: Options = .{},
+
+    output_histogram: fit.Histogram = undefined,
     original_histogram: fit.Histogram = undefined,
     histogram: fit.Histogram = undefined,
-    buffered_histogram: fit.Histogram = undefined,
 
     _allocator: std.mem.Allocator = undefined,
     _scratch_points: [][]f64 = &.{},
@@ -30,12 +32,20 @@ pub const Signal = struct {
 
     first_iter: bool = true,
 
+    pub const Options = struct {
+        buffer_bins: ?[]const [2]u32 = null,
+        histogram_options: fit.Histogram.Options = .{
+            .zero_pad = 0.5,
+            .density = true,
+        },
+    };
+
     pub fn init(
         allocator: std.mem.Allocator,
         name: []const u8,
         points: []const fit.DataPoints,
         dataset: *fit.Dataset,
-        options: fit.Histogram.Options,
+        options: Options,
     ) !Signal {
         var sig = Signal{};
         sig._allocator = allocator;
@@ -69,13 +79,62 @@ pub const Signal = struct {
                 sig._scratch_points[dim_idx][p_idx] = input_points[p_idx];
             }
         }
+
         var bins = try allocator.alloc([]const f64, sig.dimensions.len);
         defer allocator.free(bins);
-        sig.histogram_options = options;
+
+        sig.options = options;
+        sig.buffer_bins = try allocator.alloc([2]u32, sig.dimensions.len);
+        if (sig.options.buffer_bins) |buf_bins| {
+            if (buf_bins.len != sig.dimensions.len) {
+                std.debug.panic("Must supply number of buffer bins for every dimension.", .{});
+            }
+            for (buf_bins, 0..) |bb, idx| {
+                sig.buffer_bins[idx] = bb;
+            }
+        } else {
+            for (sig.buffer_bins) |*b| {
+                b.* = .{ 0, 0 };
+            }
+        }
+
         for (0..bins.len) |idx| bins[idx] = sig.dimensions[idx].bins;
-        sig.histogram = try .init(allocator, bins, sig._scratch_points, sig.histogram_options);
-        sig.original_histogram = try .init(allocator, bins, sig._scratch_points, sig.histogram_options);
-        sig.histogram.options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
+        var backing_hist_bins = try allocator.alloc([]const f64, bins.len);
+        defer {
+            for (backing_hist_bins) |bhb| {
+                allocator.free(bhb);
+            }
+            allocator.free(backing_hist_bins);
+        }
+        for (0..sig.dimensions.len) |idx| {
+            const nbins = sig.dimensions[idx].bins.len;
+            const low_width = sig.dimensions[idx].bins[1] - sig.dimensions[idx].bins[0];
+            const high_width = sig.dimensions[idx].bins[nbins - 1] - sig.dimensions[idx].bins[nbins - 2];
+            const low_bins = try utilities.linearSpacedBins(
+                allocator,
+                f64,
+                sig.dimensions[idx].bins[0] - @as(f64, @floatFromInt(sig.buffer_bins[idx][0])) * low_width,
+                sig.dimensions[idx].bins[0] - low_width,
+                sig.buffer_bins[idx][0],
+            );
+            defer allocator.free(low_bins);
+            const high_bins = try utilities.linearSpacedBins(
+                allocator,
+                f64,
+                sig.dimensions[idx].bins[nbins - 1] + high_width,
+                sig.dimensions[idx].bins[nbins - 1] + @as(f64, @floatFromInt(sig.buffer_bins[idx][1])) * high_width,
+                sig.buffer_bins[idx][1],
+            );
+            defer allocator.free(high_bins);
+            backing_hist_bins[idx] = try std.mem.concat(allocator, f64, &.{ low_bins, sig.dimensions[idx].bins, high_bins });
+        }
+
+        sig.original_histogram = try .init(allocator, backing_hist_bins, sig._scratch_points, sig.options.histogram_options);
+        var backing_options = sig.options.histogram_options;
+        backing_options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
+        sig.histogram = try .init(allocator, backing_hist_bins, sig._scratch_points, backing_options);
+        sig.output_histogram = try .init(allocator, bins, sig._scratch_points, sig.options.histogram_options);
+        sig.output_histogram.options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
         return sig;
     }
 
@@ -91,11 +150,13 @@ pub const Signal = struct {
         }
         self._allocator.free(self._scratch_points);
         self._allocator.free(self.dimensions);
+        self._allocator.free(self.buffer_bins);
         self.systematics.deinit(self._allocator);
         self._last_systematics.deinit(self._allocator);
         self._allocator.free(self.probability);
-        self.histogram.deinit();
+        self.output_histogram.deinit();
         self.original_histogram.deinit();
+        self.histogram.deinit();
     }
 
     /// Add a systematic effect to the signal
@@ -157,16 +218,37 @@ pub const Signal = struct {
             // Reset histogram when running systematics
             self.histogram.deinit();
             self.histogram = try self.original_histogram.clone(self._allocator);
+            self.needs_binning = false;
             std.log.debug("Rerunning systematics for {s}", .{self.name});
             for (self.systematics.items) |systematic| {
                 systematic.applySystematic(self);
             }
+            const stride = self.histogram.bins[0].len - 1;
+            const offset = @as(usize, @intCast(self.buffer_bins[0][0]));
+            const keep = self.dimensions[0].bins.len - 1;
+
+            var idx = offset;
+            var kept: usize = 0;
+            while (idx < self.histogram.contents.len) : (idx += stride) {
+                const bin = try self.histogram.flatIndexToBin(idx);
+                var in_dim = true;
+                for (bin, 0..) |b, dim_idx| {
+                    if (b < self.buffer_bins[dim_idx][0] or b >= (self.buffer_bins[dim_idx][0] + self.dimensions[dim_idx].bins.len - 1)) {
+                        in_dim = false;
+                    }
+                }
+                if (!in_dim) continue;
+                @memcpy(self.output_histogram.contents[keep * kept .. keep * (kept + 1)], self.histogram.contents[idx..(idx + keep)]);
+                kept += 1;
+            }
+
+            self.output_histogram.zeroPad(self.output_histogram.options.zero_pad.?);
+            if (self.output_histogram.options.density) {
+                self.output_histogram.normalize();
+            }
+            @memcpy(self.probability, self.output_histogram.contents);
         }
-        self.histogram.zeroPad(self.histogram.options.zero_pad.?);
-        if (self.histogram.options.density) {
-            self.histogram.normalize();
-        }
-        @memcpy(self.probability, self.histogram.contents);
+
         self.first_iter = false;
         return self.probability;
     }

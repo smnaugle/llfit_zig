@@ -391,7 +391,7 @@ pub const Dataset = struct {
         self: *Dataset,
         name: []const u8,
         points: []const fit.DataPoints,
-        options: fit.Histogram.Options,
+        options: fit.Signal.Options,
     ) !*fit.Signal {
         const signal_ptr = try self._allocator.create(fit.Signal);
         signal_ptr.* = try .init(self._allocator, name, points, self, options);

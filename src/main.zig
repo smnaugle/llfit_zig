@@ -31,7 +31,7 @@ pub fn main() !void {
             .{ .dimension_name = "energy", .points = &.{ 1.2, 1.2, 1.5 } },
             .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
         },
-        .{ .density = true },
+        .{},
     );
     const tl208 = try ppo.addSignal(
         "Tl208",
@@ -39,7 +39,7 @@ pub fn main() !void {
             .{ .dimension_name = "energy", .points = &.{ 3.2, 4.2, 4.5 } },
             .{ .dimension_name = "radius", .points = &.{ 100, 400, 2500 } },
         },
-        .{ .density = true },
+        .{},
     );
     try bipo214.addSystematic(energy_shift);
     try tl208.addSystematic(energy_shift);

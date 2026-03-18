@@ -11,6 +11,7 @@ pub fn linearSpacedBins(allocator: std.mem.Allocator, comptime T: type, start: T
         .float => {},
         inline else => @compileError("Cannot create bins from non-float inputs"),
     }
+    if (nbins == 0) return &.{};
     var bins = try allocator.alloc(T, nbins);
     const step = (stop - start) / @as(T, @floatFromInt(nbins - 1));
     for (0..nbins) |idx| {

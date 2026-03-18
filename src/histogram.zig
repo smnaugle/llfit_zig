@@ -6,11 +6,12 @@ pub const Histogram = struct {
     bin_volumes: []f64 = &.{},
     nentries: u64 = 0,
     contents: []f64 = &.{},
+
     scratch_coord: []u64 = &.{},
     scratch_point: []f64 = &.{},
+
     options: Options = .{},
 
-    // FIXME: Think about how to handle zeropad
     _allocator: std.mem.Allocator = undefined,
 
     pub const Options = struct {
@@ -25,8 +26,6 @@ pub const Histogram = struct {
         hist.bins = try hist._allocator.alloc([]f64, bins.len);
         var total_bins: usize = 1;
         for (bins, 0..) |b, di| {
-            // const nb_ptr = try hist._allocator.create([]f64);
-            // nb_ptr.* = try hist._allocator.dupe(f64, b.*);
             hist.bins[di] = try hist._allocator.dupe(f64, b);
             total_bins *= (b.len - 1);
         }
