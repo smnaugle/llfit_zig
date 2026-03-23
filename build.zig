@@ -59,6 +59,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    exe.step.dependOn(nlopt_step);
     exe.root_module.addImport("llfit", lib.root_module);
     b.installArtifact(exe);
 }
