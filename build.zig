@@ -4,11 +4,14 @@ pub fn build(b: *std.Build) void {
     const nlopt_dep = b.dependency("nlopt", .{});
 
     const nlopt_src = nlopt_dep.path("");
-    const nlopt_build_dir = b.cache_root.join(b.allocator, &.{"nlopt_build"}) catch unreachable;
-    const nlopt_install_dir = b.cache_root.join(b.allocator, &.{"nlopt_install"}) catch unreachable;
+    // const nlopt_build_dir = b.build_root.join(b.allocator, &.{".zig-cache/nlopt_build/"}) catch unreachable;
+    const nlopt_build_dir = b.path(".zig-cache/nlopt_build/");
+    // const nlopt_install_dir = b.build_root.join(b.allocator, &.{".zig-cache/nlopt_install/"}) catch unreachable;
+    const nlopt_install_dir = b.path(".zig-cache/nlopt_install/");
 
-    const nlopt_lib_file = b.pathJoin(&.{ nlopt_install_dir, "lib/libnlopt.so" });
-    const lib_exists = if (std.fs.accessAbsolute(b.pathFromRoot(nlopt_lib_file), .{})) |_| true else |_| false;
+    const nlopt_lib_file = nlopt_install_dir.path(b, "lib/libnlopt.so");
+    // const nlopt_lib_file = b.pathJoin(&.{ nlopt_install_dir, "lib/libnlopt.so" });
+    const lib_exists = if (std.fs.accessAbsolute(nlopt_lib_file.getPath(b), .{})) |_| true else |_| false;
 
     var nlopt_step = b.step("nlopt_install", "");
     if (!lib_exists) {
@@ -17,14 +20,14 @@ pub fn build(b: *std.Build) void {
             "-S",
             nlopt_src.getPath(b),
             "-B",
-            nlopt_build_dir,
-            b.fmt("-DCMAKE_INSTALL_PREFIX={s}", .{nlopt_install_dir}),
+            nlopt_build_dir.getPath(b),
+            b.fmt("-DCMAKE_INSTALL_PREFIX={s}", .{nlopt_install_dir.getPath(b)}),
         });
 
         const nlopt_build = b.addSystemCommand(&.{
             "make",
             "-C",
-            nlopt_build_dir,
+            nlopt_build_dir.getPath(b),
             "install",
         });
         nlopt_build.step.dependOn(&nlopt_configure.step);
@@ -46,9 +49,13 @@ pub fn build(b: *std.Build) void {
     if (!lib_exists) {
         lib.step.dependOn(nlopt_step);
     }
-    lib.root_module.addLibraryPath(b.path(b.pathJoin(&.{ nlopt_install_dir, "lib" })));
+    // lib.root_module.addLibraryPath(b.build_root.join(b.allocator, &.{".zig-cache/nlopt_install/lib/"}) catch unreachable);
+    // lib.root_module.addLibraryPath(b.path(b.pathJoin(&.{ nlopt_install_dir, "lib" })));
+    lib.root_module.addLibraryPath(nlopt_install_dir.path(b, "lib"));
     lib.root_module.linkSystemLibrary("nlopt", .{});
-    lib.root_module.addSystemIncludePath(b.path(b.pathJoin(&.{ nlopt_install_dir, "include" })));
+    // lib.root_module.addSystemIncludePath(b.path(b.pathJoin(&.{ nlopt_install_dir, "include" })));
+    // lib.root_module.addSystemIncludePath(b.build_root.join(b.allocator, &.{".zig-cache/nlopt_install/lib/"}) catch unreachable);
+    lib.root_module.addSystemIncludePath(nlopt_install_dir.path(b, "include"));
     b.installArtifact(lib);
     const exe = b.addExecutable(.{
         .name = "llfit_test",
