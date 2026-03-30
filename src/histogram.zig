@@ -195,6 +195,48 @@ pub const Histogram = struct {
         self.contents[index] += 1;
     }
 
+    pub const SliceIterator = struct {
+        histogram: *const Histogram,
+        slice: []*f64,
+        slice_idx: usize = 0,
+        stride: usize = 0,
+        num_slices: usize,
+        pub fn next(iter: *SliceIterator) ?[]*f64 {
+            if (iter.slice_idx >= iter.num_slices) return null;
+            const nbins = iter.slice.len;
+            for (0..nbins) |bin_idx| {
+                const true_idx = iter.stride * bin_idx + iter.slice_idx % iter.stride + @divTrunc(iter.slice_idx, iter.stride) * nbins;
+                iter.slice[bin_idx] = &iter.histogram.contents[true_idx];
+            }
+            iter.slice_idx += 1;
+            return iter.slice;
+        }
+        pub fn init(allocator: std.mem.Allocator, histogram: *const Histogram, dimension: usize) !SliceIterator {
+            var stride: usize = 1;
+            for (0..dimension) |idx| stride *= (histogram.bins[idx].len - 1);
+            var num_slices: usize = 1;
+            for (0..histogram.bins.len) |idx| {
+                if (idx == dimension) continue;
+                num_slices *= (histogram.bins[idx].len - 1);
+            }
+
+            const slice = try allocator.alloc(*f64, histogram.bins[dimension].len - 1);
+            return .{
+                .slice = slice,
+                .histogram = histogram,
+                .num_slices = num_slices,
+                .stride = stride,
+            };
+        }
+        pub fn deinit(self: *SliceIterator, allocator: std.mem.Allocator) void {
+            allocator.free(self.slice);
+        }
+    };
+
+    pub fn sliceIterator(self: *const Histogram, allocator: std.mem.Allocator, dimension: usize) !SliceIterator {
+        return try .init(allocator, self, dimension);
+    }
+
     pub fn deinit(self: *Histogram) void {
         for (self.bins) |*b| {
             self._allocator.free(b.*);
