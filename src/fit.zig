@@ -298,6 +298,101 @@ pub const Fit = struct {
         }
         return .{ xs, dnlls };
     }
+
+    pub fn calculateNegativeHessian(self: Fit, allocator: std.mem.Allocator, step: ?f64) ![][]f64 {
+        const hess = try allocator.alloc([]f64, self._free.items.len);
+        for (hess) |*h| {
+            h.* = try allocator.alloc(f64, self._free.items.len);
+        }
+
+        for (self._free.items, 0..) |pi, i| {
+            for (self._free.items, 0..) |pj, j| {
+                var si: f64 = 0;
+                var sj: f64 = 0;
+                if (step == null) {
+                    si = @abs(pi.value * std.math.pow(f64, std.math.floatEpsAt(f64, pi.value), 0.25));
+                    sj = @abs(pj.value * std.math.pow(f64, std.math.floatEpsAt(f64, pj.value), 0.25));
+                } else {
+                    si = step.?;
+                    sj = step.?;
+                }
+                const pi_in = pi.value;
+                const pj_in = pj.value;
+
+                var pj_high = pj_in + sj;
+                var pj_low = pj_in - sj;
+                if (pj_high > pj.bounds[1]) {
+                    pj_high = pj_in;
+                    pj_low = pj_in - 2 * sj;
+                    if (pj_low < pj.bounds[0]) {
+                        return error.OverConstrained;
+                    }
+                } else if (pj_low < pj.bounds[0]) {
+                    pj_low = pj_in;
+                    pj_high = pj_in + 2 * sj;
+                    if (pj_high > pj.bounds[1]) {
+                        return error.OverConstrained;
+                    }
+                }
+
+                var pi_high = pi_in + si;
+                var pi_low = pi_in - si;
+                if (pi_high > pi.bounds[1]) {
+                    pi_high = pi_in;
+                    pi_low = pi_in - 2 * si;
+                    if (pi_low < pi.bounds[0]) {
+                        return error.OverConstrained;
+                    }
+                } else if (pi_low < pi.bounds[0]) {
+                    pi_low = pi_in;
+                    pi_high = pi_in + 2 * si;
+                    if (pi_high > pi.bounds[1]) {
+                        return error.OverConstrained;
+                    }
+                }
+
+                if (i == j) {
+                    // Special case for i==j since that will always be zero with this approach
+                    pi.value = pi_high;
+                    const fp = self.getNLL();
+                    pi.value = pi_in;
+                    const f0 = self.getNLL();
+                    pi.value = pi_low;
+                    const fm = self.getNLL();
+                    hess[i][j] = (fp - 2 * f0 + fm) / (si * si);
+                    pi.value = pi_in;
+                    continue;
+                }
+
+                pj.value = pj_high;
+                pi.value = pi_high;
+                const pp = self.getNLL();
+
+                pj.value = pj_high;
+                pi.value = pi_low;
+                const pm = self.getNLL();
+
+                pj.value = pj_low;
+                pi.value = pi_high;
+                const mp = self.getNLL();
+
+                pj.value = pj_low;
+                pi.value = pi_low;
+                const mm = self.getNLL();
+                fitlog.debug("Running for {s}, {s}", .{ pj.name, pi.name });
+                fitlog.debug("sj, si: {d}, {d}", .{ sj, si });
+                fitlog.debug("pj_low, pj_high: {d}, {d}", .{ pj_low, pj_high });
+                fitlog.debug("pi_low, pi_high: {d}, {d}", .{ pi_low, pi_high });
+                fitlog.debug("pp: {d}, pm: {d}, mp: {d}, mm: {d}", .{ pp, pm, mp, mm });
+                fitlog.debug("(pp - pm - mp + mm): {d}", .{(pp - pm - mp + mm)});
+                hess[i][j] = (pp - pm - mp + mm) / (4 * sj * si);
+
+                pi.value = pi_in;
+                pj.value = pj_in;
+            }
+        }
+        return hess;
+    }
 };
 
 pub const Dataset = struct {
