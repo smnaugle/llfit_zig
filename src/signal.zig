@@ -22,8 +22,12 @@ pub const Signal = struct {
 
     options: Options = .{},
 
+    /// Histogram whose contents is returned when getProbability is called
+    /// No buffer bins since it must match data dimensions!
     output_histogram: fit.Histogram = undefined,
+    /// Histogram containing original loaded points, has buffer bins
     original_histogram: fit.Histogram = undefined,
+    /// Histogram to which systematics should be applied, has buffer bins
     histogram: fit.Histogram = undefined,
 
     _allocator: std.mem.Allocator = undefined,
@@ -253,9 +257,9 @@ pub const Signal = struct {
         return self.probability;
     }
 
-    pub fn format(self: @This(), writer: *std.io.Writer) !void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) !void {
         const temp_allocator = std.heap.page_allocator;
-        var local_writer: std.io.Writer.Allocating = .init(temp_allocator);
+        var local_writer: std.Io.Writer.Allocating = .init(temp_allocator);
         defer local_writer.deinit();
         _ = try local_writer.writer.print("{s}:\n", .{self.name});
         _ = try local_writer.writer.print("\tvalue: {d}\n", .{self.parameter.value});
