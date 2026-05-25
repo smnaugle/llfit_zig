@@ -205,7 +205,7 @@ pub const Histogram = struct {
             if (iter.slice_idx >= iter.num_slices) return null;
             const nbins = iter.slice.len;
             for (0..nbins) |bin_idx| {
-                const true_idx = iter.stride * bin_idx + iter.slice_idx % iter.stride + @divTrunc(iter.slice_idx, iter.stride) * nbins;
+                const true_idx = iter.stride * bin_idx + iter.slice_idx % iter.stride + @divTrunc(iter.slice_idx, iter.stride) * iter.stride * nbins;
                 iter.slice[bin_idx] = &iter.histogram.contents[true_idx];
             }
             iter.slice_idx += 1;
