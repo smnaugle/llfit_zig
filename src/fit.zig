@@ -91,11 +91,11 @@ pub const Fit = struct {
         var results: f64 = 0;
         for (self.systematics.items) |systematic| {
             results += penalty(systematic.parameter.value, systematic.parameter.expectation, systematic.parameter.sigma);
-            std.log.debug("After systematics penalty: {d}", .{results});
+            fitlog.debug("Penalty for {s}: {d}", .{ systematic.name, results });
         }
         for (self.datasets.items) |dataset| {
             results += dataset.getNLL();
-            std.log.debug("After datasets calculation: {d}", .{results});
+            fitlog.debug("After datasets calculation: {d}", .{results});
         }
         return results;
     }
@@ -175,8 +175,8 @@ pub const Fit = struct {
         var nll = fitresult.value;
         var num_iter: u16 = 0;
         while (nll - fitresult.value < 2) {
-            if (num_iter > 16) {
-                std.log.warn("Could not find parameter scan range", .{});
+            if (num_iter > 1024) {
+                fitlog.warn("Could not find parameter scan range", .{});
                 break;
             }
             step_size *= 2;
@@ -200,7 +200,7 @@ pub const Fit = struct {
                     } else {
                         param.value = param.bounds[0];
                     }
-                    std.log.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
+                    fitlog.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
                     break;
                 }
             }
@@ -214,8 +214,8 @@ pub const Fit = struct {
         }
         num_iter = 0;
         while (nll - fitresult.value > 4) {
-            if (num_iter > 16) {
-                std.log.warn("Could not find parameter scan range", .{});
+            if (num_iter > 1024) {
+                fitlog.warn("Could not find parameter scan range", .{});
                 break;
             }
             step_size /= 2;
@@ -225,7 +225,7 @@ pub const Fit = struct {
                 param.value = original_value - step_size;
             }
             if (param.value < param.bounds[0] or param.value > param.bounds[1]) {
-                std.log.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
+                fitlog.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
                 break;
             }
             const new_min = self.minimize(optimizer);
@@ -251,6 +251,15 @@ pub const Fit = struct {
             try state.put(p.name, .{ .value = p.value, .free = p.free });
         }
         return state;
+    }
+    pub fn applyAndFreeParameterStates(self: *Fit, state: *std.StringHashMap(ParameterState)) void {
+        for (self._parameters.items) |p| {
+            const param_state = state.get(p.name) orelse continue;
+            p.value = param_state.value;
+            p.free = param_state.free;
+        }
+        self.updateParameters() catch unreachable;
+        state.deinit();
     }
 
     const ScanOptions = struct {
@@ -278,14 +287,14 @@ pub const Fit = struct {
         if (options.range == null) {
             bounds[0] = try self.getParameterScanBound(param, optimize, fitresult, false);
             bounds[1] = try self.getParameterScanBound(param, optimize, fitresult, true);
-            std.log.info("Bounds from scan: {d}, {d}", .{ bounds[0], bounds[1] });
+            fitlog.info("Bounds from scan: {d}, {d}", .{ bounds[0], bounds[1] });
         } else {
             bounds[0] = options.range.?[0];
             bounds[1] = options.range.?[1];
         }
 
         for (0..options.steps) |idx| {
-            std.log.info("On step {d} out of {d}", .{ idx, options.steps });
+            fitlog.info("On step {d} out of {d}", .{ idx, options.steps });
             const x = bounds[0] + @as(f64, @floatFromInt(idx)) * (bounds[1] - bounds[0]) / @as(f64, @floatFromInt(options.steps));
             xs[idx] = x;
             param.value = x;
@@ -294,12 +303,84 @@ pub const Fit = struct {
                 p.value = state.get(p.name).?.value;
             }
             dnlls[idx] = scan_result.value - fitresult.value;
-            std.log.info("delta_nll is {d}", .{dnlls[idx]});
+            fitlog.info("delta_nll is {d}", .{dnlls[idx]});
         }
         return .{ xs, dnlls };
     }
 
     pub fn calculateNegativeHessian(self: Fit, allocator: std.mem.Allocator, step: ?f64) ![][]f64 {
+        const Func = struct {
+            pub fn getParameterRange(p: *Parameter, p_in: f64, s: f64) ![2]f64 {
+                var p_high = p_in + s;
+                var p_low = p_in - s;
+                if (p_high > p.bounds[1]) {
+                    p_high = p_in;
+                    p_low = p_in - 2 * s;
+                    if (p_low < p.bounds[0]) {
+                        fitlog.err("On paramter {s}, cannot find adequate low bound.", .{p.name});
+                        fitlog.err("Bounds are {any}.", .{p.bounds});
+                        fitlog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
+                        return error.OverConstrained;
+                    }
+                } else if (p_low < p.bounds[0]) {
+                    p_low = p_in;
+                    p_high = p_in + 2 * s;
+                    if (p_high > p.bounds[1]) {
+                        fitlog.err("On paramter {s}, cannot find adequate high bound.", .{p.name});
+                        fitlog.err("Bounds are {any}.", .{p.bounds});
+                        fitlog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
+                        return error.OverConstrained;
+                    }
+                }
+                return .{ p_low, p_high };
+            }
+            pub fn calculateNLL(pfit: *const Fit, pi: *Parameter, pj: *Parameter, pi_values: [2]f64, pj_values: [2]f64) [4]f64 {
+                const pi_in = pi.value;
+                const pj_in = pj.value;
+
+                const pj_low = pj_values[0];
+                const pj_high = pj_values[1];
+                const pi_low = pi_values[0];
+                const pi_high = pi_values[1];
+
+                if (pi == pj) {
+                    // Special case for i==j since that will always be zero with this approach
+                    pi.value = pi_high;
+                    const fp = pfit.getNLL();
+                    pi.value = (pi_high + pi_low) / 2;
+                    const f0 = pfit.getNLL();
+                    pi.value = pi_low;
+                    const fm = pfit.getNLL();
+
+                    pi.value = pi_in;
+                    pj.value = pj_in;
+
+                    return .{ fp, f0, fm, std.math.nan(f64) };
+                }
+
+                pj.value = pj_high;
+                pi.value = pi_high;
+                const pp = pfit.getNLL();
+
+                pj.value = pj_high;
+                pi.value = pi_low;
+                const pm = pfit.getNLL();
+
+                pj.value = pj_low;
+                pi.value = pi_high;
+                const mp = pfit.getNLL();
+
+                pj.value = pj_low;
+                pi.value = pi_low;
+                const mm = pfit.getNLL();
+
+                pi.value = pi_in;
+                pj.value = pj_in;
+
+                return .{ pp, pm, mp, mm };
+            }
+        };
+
         const hess = try allocator.alloc([]f64, self._free.items.len);
         for (hess) |*h| {
             h.* = try allocator.alloc(f64, self._free.items.len);
@@ -312,6 +393,10 @@ pub const Fit = struct {
                 if (step == null) {
                     si = @abs(pi.value * std.math.pow(f64, std.math.floatEpsAt(f64, pi.value), 0.25));
                     sj = @abs(pj.value * std.math.pow(f64, std.math.floatEpsAt(f64, pj.value), 0.25));
+                    // It seems like if parameter is too small the step size is not big enough,
+                    // this cut off size was just chosen at random
+                    if (si < 1e-1) si = std.math.pow(f64, std.math.floatEpsAt(f64, 1e-1), 0.25);
+                    if (sj < 1e-1) sj = std.math.pow(f64, std.math.floatEpsAt(f64, 1e-1), 0.25);
                 } else {
                     si = step.?;
                     sj = step.?;
@@ -319,73 +404,84 @@ pub const Fit = struct {
                 const pi_in = pi.value;
                 const pj_in = pj.value;
 
-                var pj_high = pj_in + sj;
-                var pj_low = pj_in - sj;
-                if (pj_high > pj.bounds[1]) {
-                    pj_high = pj_in;
-                    pj_low = pj_in - 2 * sj;
-                    if (pj_low < pj.bounds[0]) {
-                        return error.OverConstrained;
+                var pj_range = try Func.getParameterRange(pj, pj_in, sj);
+
+                var pi_range = try Func.getParameterRange(pi, pi_in, si);
+
+                var nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+
+                while (nll_values[0] == nll_values[1]) {
+                    if (si == 0) {
+                        std.debug.print("zero step for pi: {s}\n", .{pi.name});
                     }
-                } else if (pj_low < pj.bounds[0]) {
-                    pj_low = pj_in;
-                    pj_high = pj_in + 2 * sj;
-                    if (pj_high > pj.bounds[1]) {
-                        return error.OverConstrained;
+                    si *= 10;
+                    pi_range = blk: {
+                        const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                            fitlog.err("{any}", .{err});
+                            break :blk pi.bounds;
+                        };
+                        break :blk rv;
+                    };
+                    std.debug.print("pi: {s}\n", .{pi.name});
+                    std.debug.print("pj: {s}\n", .{pj.name});
+                    std.debug.print("si: {any}\n", .{si});
+                    std.debug.print("Retrying with range {any}\n", .{pi_range});
+                    nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                    std.debug.print("Got vals {any}\n", .{nll_values});
+                    if ((nll_values[0] == nll_values[1]) and std.mem.eql(f64, &pi_range, &pi.bounds)) {
+                        nll_values[0] += std.math.floatEpsAt(f64, nll_values[0]);
+                        break;
+                    }
+                }
+                while (nll_values[0] == nll_values[2]) {
+                    if (sj == 0) {
+                        std.debug.print("zero step for pj: {s}\n", .{pj.name});
+                        std.debug.print("zero step for pj: {d}\n", .{pj.value});
+                    }
+                    if (i == j) {
+                        // @panic("This should not happen unless not at minimum...");
+                        fitlog.warn("This should not happen\n", .{});
+                    }
+                    sj *= 10;
+                    pj_range = blk: {
+                        const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                            fitlog.err("{any}", .{err});
+                            break :blk pj.bounds;
+                        };
+                        break :blk rv;
+                    };
+                    std.debug.print("pi: {s}\n", .{pi.name});
+                    std.debug.print("pj: {s}\n", .{pj.name});
+                    std.debug.print("sj: {any}\n", .{sj});
+                    std.debug.print("Retrying with range {any}\n", .{pj_range});
+                    nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                    std.debug.print("Got vals {any}\n", .{nll_values});
+                    if ((nll_values[0] == nll_values[2]) and std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                        nll_values[0] += std.math.floatEpsAt(f64, nll_values[0]);
+                        break;
                     }
                 }
 
-                var pi_high = pi_in + si;
-                var pi_low = pi_in - si;
-                if (pi_high > pi.bounds[1]) {
-                    pi_high = pi_in;
-                    pi_low = pi_in - 2 * si;
-                    if (pi_low < pi.bounds[0]) {
-                        return error.OverConstrained;
-                    }
-                } else if (pi_low < pi.bounds[0]) {
-                    pi_low = pi_in;
-                    pi_high = pi_in + 2 * si;
-                    if (pi_high > pi.bounds[1]) {
-                        return error.OverConstrained;
-                    }
-                }
+                const pp = nll_values[0];
+                const pm = nll_values[1];
+                const mp = nll_values[2];
+                const mm = nll_values[3];
 
                 if (i == j) {
-                    // Special case for i==j since that will always be zero with this approach
-                    pi.value = pi_high;
-                    const fp = self.getNLL();
+                    std.debug.assert(std.math.isNan(mm));
+                    hess[i][j] = (pp - 2 * pm + mp) / (si * si);
                     pi.value = pi_in;
-                    const f0 = self.getNLL();
-                    pi.value = pi_low;
-                    const fm = self.getNLL();
-                    hess[i][j] = (fp - 2 * f0 + fm) / (si * si);
-                    pi.value = pi_in;
-                    continue;
+                    pj.value = pj_in;
+                } else {
+                    hess[i][j] = (pp - pm - mp + mm) / (4 * sj * si);
                 }
 
-                pj.value = pj_high;
-                pi.value = pi_high;
-                const pp = self.getNLL();
-
-                pj.value = pj_high;
-                pi.value = pi_low;
-                const pm = self.getNLL();
-
-                pj.value = pj_low;
-                pi.value = pi_high;
-                const mp = self.getNLL();
-
-                pj.value = pj_low;
-                pi.value = pi_low;
-                const mm = self.getNLL();
                 fitlog.debug("Running for {s}, {s}", .{ pj.name, pi.name });
                 fitlog.debug("sj, si: {d}, {d}", .{ sj, si });
-                fitlog.debug("pj_low, pj_high: {d}, {d}", .{ pj_low, pj_high });
-                fitlog.debug("pi_low, pi_high: {d}, {d}", .{ pi_low, pi_high });
+                fitlog.debug("pj_low, pj_high: {any}", .{pj_range});
+                fitlog.debug("pi_low, pi_high: {any}", .{pi_range});
                 fitlog.debug("pp: {d}, pm: {d}, mp: {d}, mm: {d}", .{ pp, pm, mp, mm });
                 fitlog.debug("(pp - pm - mp + mm): {d}", .{(pp - pm - mp + mm)});
-                hess[i][j] = (pp - pm - mp + mm) / (4 * sj * si);
 
                 pi.value = pi_in;
                 pj.value = pj_in;
@@ -456,6 +552,19 @@ pub const Dataset = struct {
         self._total_pdf_scratch = try self._allocator.alloc(f64, self.data_counts.len);
     }
 
+    pub fn addPrebinnedData(self: *Dataset, data: []const f64) !void {
+        var tot_len: usize = 1;
+        for (self.dimensions.items) |dim| {
+            tot_len = dim.bin_centers.len * tot_len;
+        }
+        if (tot_len != data.len) {
+            fitlog.err("Cannot load data of length {d} when binning implies length of {d}\n", .{ data.len, tot_len });
+            return error.IllFormedData;
+        }
+        self.data_counts = try self._allocator.dupe(f64, data);
+        self._total_pdf_scratch = try self._allocator.alloc(f64, self.data_counts.len);
+    }
+
     pub fn addDimension(self: *Dataset, name: []const u8, bins: []const f64) !*fit.Dimension {
         const dim_ptr = try self._allocator.create(fit.Dimension);
         dim_ptr.* = try .init(self._allocator, name, bins);
@@ -507,9 +616,13 @@ pub const Dataset = struct {
             for (probabilities, 0..) |prob, idx| {
                 self._total_pdf_scratch[idx] += param.value * prob;
             }
-            penalty_total += penalty(param.value, param.expectation, param.sigma);
+            fitlog.debug("Param info: {any}\n", .{param});
+            const pen = penalty(param.value, param.expectation, param.sigma);
+            penalty_total += pen;
+            fitlog.debug("Param penalty: {d}\n", .{pen});
         }
-        fitlog.debug("{any}\n", .{self._total_pdf_scratch});
+        fitlog.debug("Total from penalties: {any}\n", .{penalty_total});
+        fitlog.debug("Total pdf: {any}\n", .{self._total_pdf_scratch});
         var total: f64 = 0;
         for (self._total_pdf_scratch, 0..) |val, idx| {
             if (self.data_counts[idx] == 0) {
