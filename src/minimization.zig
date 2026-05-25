@@ -30,6 +30,7 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
         }
         for (fit.datasets.items) |dataset| {
             std.log.warn("Probabilities for {s}: {any}", .{ dataset.name, dataset._total_pdf_scratch });
+            std.log.warn("Data counts: {any}", .{dataset.data_counts});
             ret = 1e200;
         }
     }
@@ -52,7 +53,7 @@ pub const FitResult = struct {
     status_string: []const u8 = &.{},
     value: f64 = 0,
 
-    pub fn format(self: FitResult, writer: *std.io.Writer) !void {
+    pub fn format(self: FitResult, writer: *std.Io.Writer) !void {
         try writer.print("{{status: {d}, status_string: {s}, value: {d}}}", .{ self.status, self.status_string, self.value });
     }
 };
