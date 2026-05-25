@@ -2,24 +2,28 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const nlopt_dep = b.dependency("nlopt", .{});
-    const nlopt_src = nlopt_dep.path("");
-    const nlopt_build_dir = b.path(".zig-cache/nlopt_build/");
-    const nlopt_install_dir = b.path(".zig-cache/nlopt_install/");
+    const nlopt_src = nlopt_dep.builder.build_root.path.?;
+    const nlopt_build_dir = b.cache_root.join(b.allocator, &.{"nlopt_build/"}) catch @panic("OOM");
+    const nlopt_install_dir = b.cache_root.join(b.allocator, &.{"nlopt_install/"}) catch @panic("OOM");
+
     const nlopt_configure = b.addSystemCommand(&.{
         "cmake",
         "-S",
-        nlopt_src.getPath(b),
+        nlopt_src,
         "-B",
-        nlopt_build_dir.getPath(b),
-        b.fmt("-DCMAKE_INSTALL_PREFIX={s}", .{nlopt_install_dir.getPath(b)}),
+        nlopt_build_dir,
+        b.fmt("-DCMAKE_INSTALL_PREFIX={s}", .{nlopt_install_dir}),
         "-DCMAKE_INSTALL_MESSAGE=NEVER",
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DNLOPT_CXX=OFF",
     });
     nlopt_configure.setName("Configure NLOPT");
+    nlopt_configure.step.dependOn(nlopt_dep.builder.default_step);
 
     const nlopt_build = b.addSystemCommand(&.{
         "make",
         "-C",
-        nlopt_build_dir.getPath(b),
+        nlopt_build_dir,
         "install",
     });
     nlopt_build.setName("Make and install NLOPT");
@@ -39,9 +43,12 @@ pub fn build(b: *std.Build) void {
         .root_module = mod,
     });
     lib.step.dependOn(&nlopt_build.step);
-    lib.root_module.addLibraryPath(nlopt_install_dir.path(b, "lib"));
-    lib.root_module.linkSystemLibrary("nlopt", .{});
-    lib.root_module.addSystemIncludePath(nlopt_install_dir.path(b, "include"));
+    const nlopt_lib_path = b.pathJoin(&.{ nlopt_install_dir, "/lib" });
+    lib.root_module.addLibraryPath(b.path(nlopt_lib_path));
+    lib.root_module.linkSystemLibrary("nlopt", .{ .preferred_link_mode = .static });
+    const nlopt_inc_path = b.pathJoin(&.{ nlopt_install_dir, "/include" });
+    lib.root_module.addIncludePath(b.path(nlopt_inc_path));
+    lib.use_new_linker = false;
     b.installArtifact(lib);
 
     const exe = b.addExecutable(.{
@@ -53,7 +60,8 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    exe.step.dependOn(&nlopt_build.step);
+    exe.step.dependOn(&lib.step);
     exe.root_module.addImport("llfit", lib.root_module);
+    exe.use_new_linker = false;
     b.installArtifact(exe);
 }
