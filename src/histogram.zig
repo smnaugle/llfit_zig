@@ -92,7 +92,7 @@ pub const Histogram = struct {
 
     pub fn zeroPad(self: *Histogram, pad: f64) void {
         for (self.contents) |*b| {
-            if (b.* == 0) {
+            if (b.* <= 0) {
                 b.* = pad;
             }
         }
