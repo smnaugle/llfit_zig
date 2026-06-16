@@ -6,6 +6,7 @@ const min = @import("minimization.zig");
 const Parameter = @import("Parameter.zig");
 
 const fitlog = std.log.scoped(.llfit);
+const hesslog = std.log.scoped(.llfit);
 
 /// Returns the __negative__ log-likelihood value of a Gaussian penalty term
 fn penalty(value: f64, mean: f64, sigma: f64) f64 {
@@ -314,21 +315,21 @@ pub const Fit = struct {
                 var p_high = p_in + s;
                 var p_low = p_in - s;
                 if (p_high > p.bounds[1]) {
-                    p_high = p_in;
-                    p_low = p_in - 2 * s;
+                    p_high = p.bounds[1];
+                    p_low = p_high - 2 * s;
                     if (p_low < p.bounds[0]) {
-                        fitlog.err("On paramter {s}, cannot find adequate low bound.", .{p.name});
-                        fitlog.err("Bounds are {any}.", .{p.bounds});
-                        fitlog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
+                        hesslog.err("On paramter {s}, cannot find adequate low bound.", .{p.name});
+                        hesslog.err("Bounds are {any}.", .{p.bounds});
+                        hesslog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
                         return error.OverConstrained;
                     }
                 } else if (p_low < p.bounds[0]) {
-                    p_low = p_in;
-                    p_high = p_in + 2 * s;
+                    p_low = p.bounds[0];
+                    p_high = p_low + 2 * s;
                     if (p_high > p.bounds[1]) {
-                        fitlog.err("On paramter {s}, cannot find adequate high bound.", .{p.name});
-                        fitlog.err("Bounds are {any}.", .{p.bounds});
-                        fitlog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
+                        hesslog.err("On paramter {s}, cannot find adequate high bound.", .{p.name});
+                        hesslog.err("Bounds are {any}.", .{p.bounds});
+                        hesslog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
                         return error.OverConstrained;
                     }
                 }
@@ -347,7 +348,8 @@ pub const Fit = struct {
                     // Special case for i==j since that will always be zero with this approach
                     pi.value = pi_high;
                     const fp = pfit.getNLL();
-                    pi.value = (pi_high + pi_low) / 2;
+                    // pi.value = (pi_high + pi_low) / 2;
+                    pi.value = pi_in;
                     const f0 = pfit.getNLL();
                     pi.value = pi_low;
                     const fm = pfit.getNLL();
@@ -379,7 +381,28 @@ pub const Fit = struct {
 
                 return .{ pp, pm, mp, mm };
             }
+
+            pub fn nllToHess(nlls: [4]f64, si: f64, sj: f64, i: usize, j: usize) f64 {
+                const pp = nlls[0];
+                const pm = nlls[1];
+                const mp = nlls[2];
+                const mm = nlls[3];
+
+                hesslog.debug("sj, si: {d}, {d}", .{ sj, si });
+                hesslog.debug("pp: {d}, pm: {d}, mp: {d}, mm: {d}", .{ pp, pm, mp, mm });
+
+                if (i == j) {
+                    std.debug.assert(std.math.isNan(mm));
+                    hesslog.debug("(pp - 2 *pm + mp): {d}", .{(pp - 2 * pm + mp)});
+                    return (pp - 2 * pm + mp) / (si * si);
+                } else {
+                    hesslog.debug("(pp - pm - mp + mm): {d}", .{(pp - pm - mp + mm)});
+                    return (pp - pm - mp + mm) / (4 * sj * si);
+                }
+            }
         };
+
+        const input_min_nll = self.getNLL();
 
         const hess = try allocator.alloc([]f64, self._free.items.len);
         for (hess) |*h| {
@@ -410,78 +433,147 @@ pub const Fit = struct {
 
                 var nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
 
-                while (nll_values[0] == nll_values[1]) {
-                    if (si == 0) {
-                        std.debug.print("zero step for pi: {s}\n", .{pi.name});
-                    }
-                    si *= 10;
-                    pi_range = blk: {
-                        const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
-                            fitlog.err("{any}", .{err});
-                            break :blk pi.bounds;
+                if (i != j) {
+                    while (nll_values[0] == nll_values[1]) {
+                        if (si == 0) {
+                            hesslog.warn("zero step for pi: {s}\n", .{pi.name});
+                        }
+                        si *= 10;
+                        pi_range = blk: {
+                            const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pi.bounds;
+                            };
+                            break :blk rv;
                         };
-                        break :blk rv;
-                    };
-                    std.debug.print("pi: {s}\n", .{pi.name});
-                    std.debug.print("pj: {s}\n", .{pj.name});
-                    std.debug.print("si: {any}\n", .{si});
-                    std.debug.print("Retrying with range {any}\n", .{pi_range});
-                    nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
-                    std.debug.print("Got vals {any}\n", .{nll_values});
-                    if ((nll_values[0] == nll_values[1]) and std.mem.eql(f64, &pi_range, &pi.bounds)) {
-                        nll_values[0] += std.math.floatEpsAt(f64, nll_values[0]);
-                        break;
+                        hesslog.warn("pi: {s}\n", .{pi.name});
+                        hesslog.warn("pj: {s}\n", .{pj.name});
+                        hesslog.warn("si: {any}\n", .{si});
+                        hesslog.warn("Retrying with range {any}\n", .{pi_range});
+                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        hesslog.warn("Got vals {any}\n", .{nll_values});
+                        if (std.mem.eql(f64, &pi_range, &pi.bounds)) {
+                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pi.name});
+                            break;
+                        }
                     }
-                }
-                while (nll_values[0] == nll_values[2]) {
-                    if (sj == 0) {
-                        std.debug.print("zero step for pj: {s}\n", .{pj.name});
-                        std.debug.print("zero step for pj: {d}\n", .{pj.value});
-                    }
-                    if (i == j) {
-                        // @panic("This should not happen unless not at minimum...");
-                        fitlog.warn("This should not happen\n", .{});
-                    }
-                    sj *= 10;
-                    pj_range = blk: {
-                        const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
-                            fitlog.err("{any}", .{err});
-                            break :blk pj.bounds;
+                    // This is checking if changing pj actually changes the LL calculation at all
+                    while (nll_values[0] == nll_values[2]) {
+                        sj *= 10;
+                        pj_range = blk: {
+                            const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pj.bounds;
+                            };
+                            break :blk rv;
                         };
-                        break :blk rv;
-                    };
-                    std.debug.print("pi: {s}\n", .{pi.name});
-                    std.debug.print("pj: {s}\n", .{pj.name});
-                    std.debug.print("sj: {any}\n", .{sj});
-                    std.debug.print("Retrying with range {any}\n", .{pj_range});
-                    nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
-                    std.debug.print("Got vals {any}\n", .{nll_values});
-                    if ((nll_values[0] == nll_values[2]) and std.mem.eql(f64, &pj_range, &pj.bounds)) {
-                        nll_values[0] += std.math.floatEpsAt(f64, nll_values[0]);
-                        break;
+                        hesslog.warn("pi: {s}\n", .{pi.name});
+                        hesslog.warn("pj: {s}\n", .{pj.name});
+                        hesslog.warn("sj: {any}\n", .{sj});
+                        hesslog.warn("Retrying with range {any}\n", .{pj_range});
+                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        // If changing pj does not affect calculation, and we are at the bounds,
+                        // then just bump the LL slightly so we can move on.
+                        if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                            break;
+                        }
                     }
-                }
-
-                const pp = nll_values[0];
-                const pm = nll_values[1];
-                const mp = nll_values[2];
-                const mm = nll_values[3];
-
-                if (i == j) {
-                    std.debug.assert(std.math.isNan(mm));
-                    hess[i][j] = (pp - 2 * pm + mp) / (si * si);
-                    pi.value = pi_in;
-                    pj.value = pj_in;
+                    while (nll_values[0] < input_min_nll or nll_values[1] < input_min_nll) {
+                        sj *= 10;
+                        pj_range = blk: {
+                            const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pj.bounds;
+                            };
+                            break :blk rv;
+                        };
+                        hesslog.warn("nll_values lt min  nll: {d}, {any}\n", .{ input_min_nll, nll_values });
+                        hesslog.warn("Params are {s} and {s}", .{ pi.name, pj.name });
+                        hesslog.warn("Ranges are are {any} and {any}", .{ pi_range, pj_range });
+                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        // If changing pj does not affect calculation, and we are at the bounds,
+                        // then just bump the LL slightly so we can move on.
+                        if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                            break;
+                        }
+                    }
+                    while (nll_values[0] < input_min_nll or nll_values[2] < input_min_nll) {
+                        si *= 10;
+                        pi_range = blk: {
+                            const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pi.bounds;
+                            };
+                            break :blk rv;
+                        };
+                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        // If changing pj does not affect calculation, and we are at the bounds,
+                        // then just bump the LL slightly so we can move on.
+                        if (std.mem.eql(f64, &pi_range, &pi.bounds)) {
+                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pi.name});
+                            break;
+                        }
+                    }
+                    while (nll_values[3] < input_min_nll) {
+                        si *= 10;
+                        pi_range = blk: {
+                            const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pi.bounds;
+                            };
+                            break :blk rv;
+                        };
+                        sj *= 10;
+                        pj_range = blk: {
+                            const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pj.bounds;
+                            };
+                            break :blk rv;
+                        };
+                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        // If changing pj does not affect calculation, and we are at the bounds,
+                        // then just bump the LL slightly so we can move on.
+                        if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                            break;
+                        }
+                    }
                 } else {
-                    hess[i][j] = (pp - pm - mp + mm) / (4 * sj * si);
+                    while (nll_values[0] < nll_values[1] or nll_values[2] < nll_values[1]) {
+                        si *= 10;
+                        pi_range = blk: {
+                            const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pi.bounds;
+                            };
+                            break :blk rv;
+                        };
+                        sj *= 10;
+                        pj_range = blk: {
+                            const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                hesslog.err("{any}", .{err});
+                                break :blk pj.bounds;
+                            };
+                            break :blk rv;
+                        };
+                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        if (std.mem.eql(f64, &pi_range, &pi.bounds) and std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                            break;
+                        }
+                    }
                 }
 
-                fitlog.debug("Running for {s}, {s}", .{ pj.name, pi.name });
-                fitlog.debug("sj, si: {d}, {d}", .{ sj, si });
-                fitlog.debug("pj_low, pj_high: {any}", .{pj_range});
-                fitlog.debug("pi_low, pi_high: {any}", .{pi_range});
-                fitlog.debug("pp: {d}, pm: {d}, mp: {d}, mm: {d}", .{ pp, pm, mp, mm });
-                fitlog.debug("(pp - pm - mp + mm): {d}", .{(pp - pm - mp + mm)});
+                hesslog.debug("Done with {s}, {s}", .{ pj.name, pi.name });
+                const final_vals = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                hesslog.debug("resut is {d:2}, {d:2}, {d:2}, {d:2}", .{ final_vals[0], final_vals[1], final_vals[2], final_vals[3] });
+                hesslog.debug("sj {d}, si {d}", .{ pj_range[1] - pj_range[0], pi_range[1] - pi_range[0] });
+                const res = Func.nllToHess(final_vals, pi_range[1] - pi_range[0], pj_range[1] - pj_range[0], i, j);
+                hesslog.debug("{d}", .{res});
+                hess[i][j] = res;
 
                 pi.value = pi_in;
                 pj.value = pj_in;

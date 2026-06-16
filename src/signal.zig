@@ -39,7 +39,7 @@ pub const Signal = struct {
     pub const Options = struct {
         buffer_bins: ?[]const [2]u32 = null,
         histogram_options: fit.Histogram.Options = .{
-            .zero_pad = 0.5,
+            .zero_pad = 1e-12,
             .density = true,
         },
     };
