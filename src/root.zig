@@ -16,3 +16,4 @@ const utilities = @import("utilities.zig");
 pub const linearSpacedBins = utilities.linearSpacedBins;
 
 pub const minimization = @import("minimization.zig");
+pub const inference = @import("inference.zig");

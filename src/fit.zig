@@ -4,6 +4,7 @@ const fit = @import("root.zig");
 const utilities = @import("utilities.zig");
 const min = @import("minimization.zig");
 const Parameter = @import("Parameter.zig");
+const c_imports = @import("c_imports");
 
 const fitlog = std.log.scoped(.llfit);
 const hesslog = std.log.scoped(.llfit);
@@ -14,21 +15,21 @@ fn penalty(value: f64, mean: f64, sigma: f64) f64 {
 }
 
 pub const Fit = struct {
-    name: []const u8 = "",
+    name: []const u8,
     datasets: std.ArrayList(*Dataset) = .empty,
     // name_dataset: std.StringHashMap(*Dataset) = .{},
     systematics: std.ArrayList(*fit.Systematic) = .empty,
+    llfn: *const fn (self: Fit) f64 = defNLL,
 
-    _allocator: std.mem.Allocator = undefined,
+    _allocator: std.mem.Allocator,
     _free: std.ArrayList(*Parameter) = .empty,
     _fixed: std.ArrayList(*Parameter) = .empty,
     _parameters: std.ArrayList(*Parameter) = .empty,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !Fit {
-        var init_fit = Fit{};
-        init_fit.name = try allocator.dupe(u8, name);
-        init_fit._allocator = allocator;
-        // init_fit.name_dataset = .init(allocator);
-        return init_fit;
+        return .{
+            .name = try allocator.dupe(u8, name),
+            ._allocator = allocator,
+        };
     }
 
     pub fn addDataset(self: *Fit, name: []const u8) !*Dataset {
@@ -43,7 +44,6 @@ pub const Fit = struct {
         const systematic_ptr = try self._allocator.create(fit.Systematic);
         systematic_ptr.* = .init(options);
         try self.systematics.append(self._allocator, systematic_ptr);
-        try self._free.append(self._allocator, &self.systematics.items[self.systematics.items.len - 1].parameter);
         return systematic_ptr;
     }
 
@@ -88,7 +88,7 @@ pub const Fit = struct {
         }
     }
 
-    pub fn getNLL(self: Fit) f64 {
+    pub fn defNLL(self: Fit) f64 {
         var results: f64 = 0;
         for (self.systematics.items) |systematic| {
             results += penalty(systematic.parameter.value, systematic.parameter.expectation, systematic.parameter.sigma);
@@ -99,6 +99,10 @@ pub const Fit = struct {
             fitlog.debug("After datasets calculation: {d}", .{results});
         }
         return results;
+    }
+
+    pub fn getNLL(self: Fit) f64 {
+        return self.llfn(self);
     }
 
     pub fn minimize(self: *Fit, optimizer: ?min.Optimizer) min.FitResult {
@@ -242,22 +246,17 @@ pub const Fit = struct {
         return return_val;
     }
 
-    const ParameterState = struct {
-        value: f64,
-        free: bool,
-    };
-    pub fn cacheParameterStates(self: *Fit, allocator: std.mem.Allocator) !std.StringHashMap(ParameterState) {
-        var state: std.StringHashMap(ParameterState) = .init(allocator);
+    pub fn cacheParameterStates(self: *Fit, allocator: std.mem.Allocator) !std.StringHashMap(Parameter) {
+        var state: std.StringHashMap(Parameter) = .init(allocator);
         for (self._parameters.items) |p| {
-            try state.put(p.name, .{ .value = p.value, .free = p.free });
+            try state.put(p.name, p.copyShallow());
         }
         return state;
     }
-    pub fn applyAndFreeParameterStates(self: *Fit, state: *std.StringHashMap(ParameterState)) void {
+    pub fn applyAndFreeParameterStates(self: *Fit, state: *std.StringHashMap(Parameter)) void {
         for (self._parameters.items) |p| {
             const param_state = state.get(p.name) orelse continue;
-            p.value = param_state.value;
-            p.free = param_state.free;
+            p.setFrom(param_state);
         }
         self.updateParameters() catch unreachable;
         state.deinit();
@@ -580,6 +579,44 @@ pub const Fit = struct {
             }
         }
         return hess;
+    }
+
+    pub fn calculateCovarianceMatrix(self: Fit, allocator: std.mem.Allocator, step: ?f64) ![][]f64 {
+        const neg_hess = try calculateNegativeHessian(self, allocator, step);
+        defer {
+            for (neg_hess) |row| {
+                allocator.free(row);
+            }
+            allocator.free(neg_hess);
+        }
+        const cov = try allocator.alloc([]f64, neg_hess.len);
+        for (cov) |*row| {
+            row.* = try allocator.alloc(f64, neg_hess[0].len);
+        }
+        const gsl_mat = c_imports.gsl_matrix_alloc(neg_hess.len, neg_hess[0].len);
+        defer c_imports.gsl_matrix_free(gsl_mat);
+        const gsl_inv = c_imports.gsl_matrix_alloc(neg_hess.len, neg_hess[0].len);
+        defer c_imports.gsl_matrix_free(gsl_inv);
+        const perm = c_imports.gsl_permutation_alloc(neg_hess.len);
+        defer c_imports.gsl_permutation_free(perm);
+
+        for (neg_hess, 0..) |row, i| {
+            for (row, 0..) |el, j| {
+                c_imports.gsl_matrix_set(gsl_mat, i, j, el);
+            }
+        }
+
+        var signum: c_int = 0;
+        _ = c_imports.gsl_linalg_LU_decomp(gsl_mat, perm, &signum);
+        _ = c_imports.gsl_linalg_LU_invert(gsl_mat, perm, gsl_inv);
+
+        for (cov, 0..) |row, i| {
+            for (row, 0..) |*el, j| {
+                el.* = c_imports.gsl_matrix_get(gsl_inv, i, j);
+            }
+        }
+
+        return cov;
     }
 };
 

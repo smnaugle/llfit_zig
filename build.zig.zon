@@ -1,7 +1,7 @@
 .{
     .name = .llfit,
     .version = "0.0.1",
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig.zon",
         "build.zig",
@@ -11,7 +11,11 @@
     .dependencies = .{
         .nlopt = .{
             .url = "https://github.com/stevengj/nlopt/archive/refs/tags/v2.10.1.tar.gz",
-            .hash = "N-V-__8AAI98PgCVQKJMHm3VFKqxvz1zwHYN2pAHSPYmf2eI", 
+            .hash = "N-V-__8AAI98PgCVQKJMHm3VFKqxvz1zwHYN2pAHSPYmf2eI",
+        },
+        .gsl = .{
+            .url = "https://ftp.gnu.org/gnu/gsl/gsl-2.8.tar.gz",
+            .hash = "N-V-__8AAJb8rAF-1YOFscVwUvHuneX3JgVqRuu0yenfi3wC",
         },
     },
 }

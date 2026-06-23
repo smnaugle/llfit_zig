@@ -2,9 +2,7 @@ const std = @import("std");
 
 const llfit = @import("fit.zig");
 const Parameter = @import("Parameter.zig");
-const nlopt = @cImport({
-    @cInclude("nlopt.h");
-});
+const nlopt = @import("c_imports");
 
 var count: u64 = 1;
 pub var MSG_COUNT: u64 = 100;
