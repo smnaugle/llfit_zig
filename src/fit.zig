@@ -308,7 +308,11 @@ pub const Fit = struct {
         return .{ xs, dnlls };
     }
 
-    pub fn calculateNegativeHessian(self: Fit, allocator: std.mem.Allocator, step: ?f64) ![][]f64 {
+    pub const HessianOptions = struct {
+        step: ?f64 = null,
+        check_minimum: bool = true,
+    };
+    pub fn calculateNegativeHessian(self: Fit, allocator: std.mem.Allocator, options: HessianOptions) ![][]f64 {
         const Func = struct {
             pub fn getParameterRange(p: *Parameter, p_in: f64, s: f64) ![2]f64 {
                 var p_high = p_in + s;
@@ -412,7 +416,7 @@ pub const Fit = struct {
             for (self._free.items, 0..) |pj, j| {
                 var si: f64 = 0;
                 var sj: f64 = 0;
-                if (step == null) {
+                if (options.step == null) {
                     si = @abs(pi.value * std.math.pow(f64, std.math.floatEpsAt(f64, pi.value), 0.25));
                     sj = @abs(pj.value * std.math.pow(f64, std.math.floatEpsAt(f64, pj.value), 0.25));
                     // It seems like if parameter is too small the step size is not big enough,
@@ -420,8 +424,8 @@ pub const Fit = struct {
                     if (si < 1e-1) si = std.math.pow(f64, std.math.floatEpsAt(f64, 1e-1), 0.25);
                     if (sj < 1e-1) sj = std.math.pow(f64, std.math.floatEpsAt(f64, 1e-1), 0.25);
                 } else {
-                    si = step.?;
-                    sj = step.?;
+                    si = options.step.?;
+                    sj = options.step.?;
                 }
                 const pi_in = pi.value;
                 const pj_in = pj.value;
@@ -478,90 +482,92 @@ pub const Fit = struct {
                             break;
                         }
                     }
-                    while (nll_values[0] < input_min_nll or nll_values[1] < input_min_nll) {
-                        sj *= 10;
-                        pj_range = blk: {
-                            const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
-                                hesslog.err("{any}", .{err});
-                                break :blk pj.bounds;
+                    if (options.check_minimum) {
+                        while (nll_values[0] < input_min_nll or nll_values[1] < input_min_nll) {
+                            sj *= 10;
+                            pj_range = blk: {
+                                const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                    hesslog.err("{any}", .{err});
+                                    break :blk pj.bounds;
+                                };
+                                break :blk rv;
                             };
-                            break :blk rv;
-                        };
-                        hesslog.warn("nll_values lt min  nll: {d}, {any}\n", .{ input_min_nll, nll_values });
-                        hesslog.warn("Params are {s} and {s}", .{ pi.name, pj.name });
-                        hesslog.warn("Ranges are are {any} and {any}", .{ pi_range, pj_range });
-                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
-                        // If changing pj does not affect calculation, and we are at the bounds,
-                        // then just bump the LL slightly so we can move on.
-                        if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
-                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
-                            break;
+                            hesslog.warn("nll_values lt min  nll: {d}, {any}\n", .{ input_min_nll, nll_values });
+                            hesslog.warn("Params are {s} and {s}", .{ pi.name, pj.name });
+                            hesslog.warn("Ranges are are {any} and {any}", .{ pi_range, pj_range });
+                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            // If changing pj does not affect calculation, and we are at the bounds,
+                            // then just bump the LL slightly so we can move on.
+                            if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                                hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                                break;
+                            }
                         }
-                    }
-                    while (nll_values[0] < input_min_nll or nll_values[2] < input_min_nll) {
-                        si *= 10;
-                        pi_range = blk: {
-                            const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
-                                hesslog.err("{any}", .{err});
-                                break :blk pi.bounds;
+                        while (nll_values[0] < input_min_nll or nll_values[2] < input_min_nll) {
+                            si *= 10;
+                            pi_range = blk: {
+                                const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                    hesslog.err("{any}", .{err});
+                                    break :blk pi.bounds;
+                                };
+                                break :blk rv;
                             };
-                            break :blk rv;
-                        };
-                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
-                        // If changing pj does not affect calculation, and we are at the bounds,
-                        // then just bump the LL slightly so we can move on.
-                        if (std.mem.eql(f64, &pi_range, &pi.bounds)) {
-                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pi.name});
-                            break;
+                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            // If changing pj does not affect calculation, and we are at the bounds,
+                            // then just bump the LL slightly so we can move on.
+                            if (std.mem.eql(f64, &pi_range, &pi.bounds)) {
+                                hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pi.name});
+                                break;
+                            }
                         }
-                    }
-                    while (nll_values[3] < input_min_nll) {
-                        si *= 10;
-                        pi_range = blk: {
-                            const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
-                                hesslog.err("{any}", .{err});
-                                break :blk pi.bounds;
+                        while (nll_values[3] < input_min_nll) {
+                            si *= 10;
+                            pi_range = blk: {
+                                const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                    hesslog.err("{any}", .{err});
+                                    break :blk pi.bounds;
+                                };
+                                break :blk rv;
                             };
-                            break :blk rv;
-                        };
-                        sj *= 10;
-                        pj_range = blk: {
-                            const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
-                                hesslog.err("{any}", .{err});
-                                break :blk pj.bounds;
+                            sj *= 10;
+                            pj_range = blk: {
+                                const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                    hesslog.err("{any}", .{err});
+                                    break :blk pj.bounds;
+                                };
+                                break :blk rv;
                             };
-                            break :blk rv;
-                        };
-                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
-                        // If changing pj does not affect calculation, and we are at the bounds,
-                        // then just bump the LL slightly so we can move on.
-                        if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
-                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
-                            break;
+                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            // If changing pj does not affect calculation, and we are at the bounds,
+                            // then just bump the LL slightly so we can move on.
+                            if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                                hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                                break;
+                            }
                         }
-                    }
-                } else {
-                    while (nll_values[0] < nll_values[1] or nll_values[2] < nll_values[1]) {
-                        si *= 10;
-                        pi_range = blk: {
-                            const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
-                                hesslog.err("{any}", .{err});
-                                break :blk pi.bounds;
+                    } else {
+                        while (nll_values[0] < nll_values[1] or nll_values[2] < nll_values[1]) {
+                            si *= 10;
+                            pi_range = blk: {
+                                const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                    hesslog.err("{any}", .{err});
+                                    break :blk pi.bounds;
+                                };
+                                break :blk rv;
                             };
-                            break :blk rv;
-                        };
-                        sj *= 10;
-                        pj_range = blk: {
-                            const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
-                                hesslog.err("{any}", .{err});
-                                break :blk pj.bounds;
+                            sj *= 10;
+                            pj_range = blk: {
+                                const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                    hesslog.err("{any}", .{err});
+                                    break :blk pj.bounds;
+                                };
+                                break :blk rv;
                             };
-                            break :blk rv;
-                        };
-                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
-                        if (std.mem.eql(f64, &pi_range, &pi.bounds) and std.mem.eql(f64, &pj_range, &pj.bounds)) {
-                            hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
-                            break;
+                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            if (std.mem.eql(f64, &pi_range, &pi.bounds) and std.mem.eql(f64, &pj_range, &pj.bounds)) {
+                                hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                                break;
+                            }
                         }
                     }
                 }
@@ -581,8 +587,8 @@ pub const Fit = struct {
         return hess;
     }
 
-    pub fn calculateCovarianceMatrix(self: Fit, allocator: std.mem.Allocator, step: ?f64) ![][]f64 {
-        const neg_hess = try calculateNegativeHessian(self, allocator, step);
+    pub fn calculateCovarianceMatrix(self: Fit, allocator: std.mem.Allocator, hessian_options: HessianOptions) ![][]f64 {
+        const neg_hess = try calculateNegativeHessian(self, allocator, hessian_options);
         defer {
             for (neg_hess) |row| {
                 allocator.free(row);
@@ -628,6 +634,7 @@ pub const Dataset = struct {
     data: std.StringHashMap([]f64) = undefined,
     data_counts: []f64 = &.{},
     binned_data: []f64 = &.{},
+    nllfn: *const fn (Dataset) f64 = Dataset.defNLL,
     _total_pdf_scratch: []f64 = &.{},
 
     _allocator: std.mem.Allocator = undefined,
@@ -732,7 +739,7 @@ pub const Dataset = struct {
         return signal_ptr;
     }
 
-    fn getNLL(self: Dataset) f64 {
+    fn defNLL(self: Dataset) f64 {
         utilities.zeroArray(self._total_pdf_scratch);
         var expected_events: f64 = 0;
         var penalty_total: f64 = 0;
@@ -761,5 +768,9 @@ pub const Dataset = struct {
         }
         const nll = expected_events - total + penalty_total;
         return nll;
+    }
+
+    pub fn getNLL(self: Dataset) f64 {
+        return self.nllfn(self);
     }
 };

@@ -9,7 +9,7 @@ fn buildGSL(b: *std.Build) ?*std.Build {
     var io = std.Io.Threaded.init_single_threaded;
 
     var exists: bool = true;
-    _ = b.cache_root.handle.openDir(io.io(), "gsl_install/", .{}) catch {
+    _ = b.cache_root.handle.openDir(io.io(), "gsl_install/lib/", .{}) catch {
         exists = false;
     };
     if (exists) return null;
