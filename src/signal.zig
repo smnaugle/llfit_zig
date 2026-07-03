@@ -114,22 +114,28 @@ pub const Signal = struct {
             const nbins = sig.dimensions[idx].bins.len;
             const low_width = sig.dimensions[idx].bins[1] - sig.dimensions[idx].bins[0];
             const high_width = sig.dimensions[idx].bins[nbins - 1] - sig.dimensions[idx].bins[nbins - 2];
-            const low_bins = try utilities.linearSpacedBins(
-                allocator,
-                f64,
-                sig.dimensions[idx].bins[0] - @as(f64, @floatFromInt(sig.buffer_bins[idx][0])) * low_width,
-                sig.dimensions[idx].bins[0] - low_width,
-                sig.buffer_bins[idx][0],
-            );
+            var low_bins: []f64 = &.{};
             defer allocator.free(low_bins);
-            const high_bins = try utilities.linearSpacedBins(
-                allocator,
-                f64,
-                sig.dimensions[idx].bins[nbins - 1] + high_width,
-                sig.dimensions[idx].bins[nbins - 1] + @as(f64, @floatFromInt(sig.buffer_bins[idx][1])) * high_width,
-                sig.buffer_bins[idx][1],
-            );
+            if (sig.buffer_bins[idx][0] > 0) {
+                low_bins = try utilities.linearSpacedBins(
+                    allocator,
+                    f64,
+                    sig.dimensions[idx].bins[0] - @as(f64, @floatFromInt(sig.buffer_bins[idx][0])) * low_width,
+                    sig.dimensions[idx].bins[0] - low_width,
+                    sig.buffer_bins[idx][0],
+                );
+            }
+            var high_bins: []f64 = &.{};
             defer allocator.free(high_bins);
+            if (sig.buffer_bins[idx][1] > 0) {
+                high_bins = try utilities.linearSpacedBins(
+                    allocator,
+                    f64,
+                    sig.dimensions[idx].bins[nbins - 1] + high_width,
+                    sig.dimensions[idx].bins[nbins - 1] + @as(f64, @floatFromInt(sig.buffer_bins[idx][1])) * high_width,
+                    sig.buffer_bins[idx][1],
+                );
+            }
             backing_hist_bins[idx] = try std.mem.concat(allocator, f64, &.{ low_bins, sig.dimensions[idx].bins, high_bins });
         }
 
