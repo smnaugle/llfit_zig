@@ -321,18 +321,12 @@ pub const Fit = struct {
                     p_high = p.bounds[1];
                     p_low = p_high - 2 * s;
                     if (p_low < p.bounds[0]) {
-                        hesslog.err("On paramter {s}, cannot find adequate low bound.", .{p.name});
-                        hesslog.err("Bounds are {any}.", .{p.bounds});
-                        hesslog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
                         return error.OverConstrained;
                     }
                 } else if (p_low < p.bounds[0]) {
                     p_low = p.bounds[0];
                     p_high = p_low + 2 * s;
                     if (p_high > p.bounds[1]) {
-                        hesslog.err("On paramter {s}, cannot find adequate high bound.", .{p.name});
-                        hesslog.err("Bounds are {any}.", .{p.bounds});
-                        hesslog.err("Last tried hessian bounds are {d}, {d}.", .{ p_low, p_high });
                         return error.OverConstrained;
                     }
                 }
@@ -465,6 +459,7 @@ pub const Fit = struct {
                         sj *= 10;
                         pj_range = blk: {
                             const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                hesslog.err("On line: {any}", .{@src().line});
                                 hesslog.err("{any}", .{err});
                                 break :blk pj.bounds;
                             };
@@ -487,6 +482,7 @@ pub const Fit = struct {
                             sj *= 10;
                             pj_range = blk: {
                                 const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
+                                    hesslog.err("On line: {any}", .{@src().line});
                                     hesslog.err("{any}", .{err});
                                     break :blk pj.bounds;
                                 };
@@ -507,6 +503,7 @@ pub const Fit = struct {
                             si *= 10;
                             pi_range = blk: {
                                 const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
+                                    hesslog.err("On line: {any}", .{@src().line});
                                     hesslog.err("{any}", .{err});
                                     break :blk pi.bounds;
                                 };
@@ -523,25 +520,40 @@ pub const Fit = struct {
                         while (nll_values[3] < input_min_nll) {
                             si *= 10;
                             pi_range = blk: {
-                                const rv = Func.getParameterRange(pi, pi_in, si) catch |err| {
-                                    hesslog.err("{any}", .{err});
+                                if (pi_range[0] == pi.bounds[0]) {
+                                    si /= 10;
+                                    break :blk pi_range;
+                                }
+                                const rv = Func.getParameterRange(pi, pi_in, si) catch {
                                     break :blk pi.bounds;
                                 };
                                 break :blk rv;
                             };
                             sj *= 10;
                             pj_range = blk: {
-                                const rv = Func.getParameterRange(pj, pj_in, sj) catch |err| {
-                                    hesslog.err("{any}", .{err});
+                                if (pj_range[0] == pj.bounds[0]) {
+                                    sj /= 10;
+                                    break :blk pj_range;
+                                }
+                                const rv = Func.getParameterRange(pj, pj_in, sj) catch {
                                     break :blk pj.bounds;
                                 };
                                 break :blk rv;
                             };
+                            std.debug.print("Trying for {s}: {d} - {d},\n\t{s}: {d} - {d}\n", .{
+                                pi.name,
+                                pi_range[0],
+                                pi_range[1],
+                                pj.name,
+                                pj_range[0],
+                                pj_range[1],
+                            });
                             nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            std.debug.print("LL values are {any}\n", .{nll_values});
                             // If changing pj does not affect calculation, and we are at the bounds,
                             // then just bump the LL slightly so we can move on.
-                            if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
-                                hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
+                            if (pi_range[0] == pi.bounds[0] and pj_range[0] == pj.bounds[0]) {
+                                hesslog.warn("Could not find adequate range for {s} and {s}, at bounds.", .{ pi.name, pj.name });
                                 break;
                             }
                         }
@@ -739,7 +751,7 @@ pub const Dataset = struct {
         return signal_ptr;
     }
 
-    fn defNLL(self: Dataset) f64 {
+    pub fn defNLL(self: Dataset) f64 {
         utilities.zeroArray(self._total_pdf_scratch);
         var expected_events: f64 = 0;
         var penalty_total: f64 = 0;
