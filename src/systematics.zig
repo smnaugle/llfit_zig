@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("config");
 
 const Signal = @import("signal.zig").Signal;
 const Dimension = @import("Dimension.zig");
@@ -13,6 +14,12 @@ pub fn noTransform(systematic: *Systematic, signal: *Signal) void {
 const FuncType = *const fn (*Systematic, *Signal) void;
 
 pub const Systematic = struct {
+    const Profiling = struct {
+        tot_time: i64 = 0,
+        num_runs: i64 = 0,
+        timer: std.Io.Clock = .real,
+        io: std.Io.Threaded = .init_single_threaded,
+    };
     name: []const u8 = "",
     parameter: Parameter = .{},
     /// An optional pointer to allow for the storage of additional state.
@@ -20,6 +27,8 @@ pub const Systematic = struct {
 
     // The systematics can be applied directly to the signal, no need to return anything
     applySystematicFn: FuncType = noTransform,
+
+    profiling: Profiling = .{},
 
     pub const SystematicOptions = struct {
         name: []const u8,
@@ -54,6 +63,14 @@ pub const Systematic = struct {
     }
 
     pub fn applySystematic(self: *Systematic, signal: *Signal) void {
+        var start: std.Io.Timestamp = .zero;
+        if (comptime config.systematic_profiling) start = self.profiling.timer.now(self.profiling.io.io());
         self.applySystematicFn(self, signal);
+        if (comptime config.systematic_profiling) {
+            const end = self.profiling.timer.now(self.profiling.io.io());
+            const dt = start.durationTo(end).toMicroseconds();
+            self.profiling.tot_time += dt;
+            self.profiling.num_runs += 1;
+        }
     }
 };

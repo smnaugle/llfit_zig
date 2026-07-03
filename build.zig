@@ -118,6 +118,12 @@ pub fn build(b: *std.Build) void {
     lib.root_module.addLibraryPath(b.path(b.pathJoin(&.{ gsl_install_dir, "/lib" })));
     lib.root_module.addIncludePath(b.path(b.pathJoin(&.{ gsl_install_dir, "/include" })));
     lib.root_module.addImport("c_imports", tc_mod);
+
+    const prof_opt = b.option(bool, "systematic_profiling", "Profile systematics") orelse false;
+    const lib_options = b.addOptions();
+    lib_options.addOption(bool, "systematic_profiling", prof_opt);
+    lib.root_module.addOptions("config", lib_options);
+
     b.installArtifact(lib);
 
     const exe = b.addExecutable(.{
