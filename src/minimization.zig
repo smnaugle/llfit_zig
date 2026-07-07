@@ -112,9 +112,6 @@ pub const SimpleOptimizer = struct {
             std.debug.panic("Could not set convergence tolerance", .{});
         }
 
-        const dxs = self.fit.getStepSizes(allocator) catch |err| allocError(err);
-        defer allocator.free(dxs);
-        _ = nlopt.nlopt_set_initial_step(opt, dxs.ptr);
         _ = nlopt.nlopt_set_maxeval(opt, @intCast(self.maxeval));
 
         var lbs = allocator.alloc(f64, self.fit._free.items.len) catch |err| allocError(err);

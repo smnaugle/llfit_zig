@@ -140,4 +140,15 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("llfit", lib.root_module);
     exe.use_new_linker = false;
     b.installArtifact(exe);
+
+    const tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const tests_run = b.addRunArtifact(tests);
+    const tests_step = b.step("test", "run tests");
+    tests_step.dependOn(&tests_run.step);
 }

@@ -7,7 +7,16 @@ const utilities = @import("utilities.zig");
 
 // TODO: Implement interface for signals to support binned and KDE PDFs.
 pub const Signal = struct {
-    parameter: Parameter = .{},
+    parameter: Parameter = .{
+        .value = 0,
+        .bounds = .{
+            -1 * std.math.inf(f64),
+            std.math.inf(f64),
+        },
+        .free = true,
+        .name = "",
+        .prior = .{ .gaussian = .{} },
+    },
 
     name: []const u8 = undefined,
     input_mc: std.StringHashMap([]f64) = undefined,
@@ -268,12 +277,11 @@ pub const Signal = struct {
         var local_writer: std.Io.Writer.Allocating = .init(temp_allocator);
         defer local_writer.deinit();
         _ = try local_writer.writer.print("{s}:\n", .{self.name});
-        _ = try local_writer.writer.print("\tvalue: {d}\n", .{self.parameter.value});
-        _ = try local_writer.writer.print("\tsigma: {d}\n", .{self.parameter.sigma});
-        _ = try local_writer.writer.print("\texpectation: {d}\n", .{self.parameter.expectation});
-        _ = try local_writer.writer.print("\tfree: {any}", .{self.parameter.free});
-        _ = try writer.write(local_writer.toOwnedSlice() catch |err| {
-            std.debug.panic("Could not print: {any}", .{err});
-        });
+        _ = try local_writer.writer.print("\tparam: {f}\n", .{self.parameter});
+        const slice = local_writer.toOwnedSlice() catch |err| {
+            std.debug.panic("alloc err: {any}", .{err});
+        };
+        defer temp_allocator.free(slice);
+        _ = try writer.write(slice);
     }
 };

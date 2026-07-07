@@ -9,17 +9,14 @@ const c_imports = @import("c_imports");
 const fitlog = std.log.scoped(.llfit);
 const hesslog = std.log.scoped(.llfit);
 
-/// Returns the __negative__ log-likelihood value of a Gaussian penalty term
-fn penalty(value: f64, mean: f64, sigma: f64) f64 {
-    return 0.5 * std.math.pow(f64, (value - mean) / sigma, 2);
-}
-
 pub const Fit = struct {
     name: []const u8,
     datasets: std.ArrayList(*Dataset) = .empty,
     // name_dataset: std.StringHashMap(*Dataset) = .{},
     systematics: std.ArrayList(*fit.Systematic) = .empty,
-    llfn: *const fn (self: Fit) f64 = defNLL,
+
+    llfn: *const fn (self: Fit, ?*anyopaque) f64 = defNLL,
+    llfn_params: ?*anyopaque = null,
 
     _allocator: std.mem.Allocator,
     _free: std.ArrayList(*Parameter) = .empty,
@@ -88,21 +85,49 @@ pub const Fit = struct {
         }
     }
 
-    pub fn defNLL(self: Fit) f64 {
+    pub fn defDatasetNLL(dataset: Dataset) f64 {
+        utilities.zeroArray(dataset._total_pdf_scratch);
+        var expected_events: f64 = 0;
+        for (dataset.signals.items) |signal| {
+            const param = signal.parameter;
+            expected_events += param.value;
+            const probabilities = signal.getProbability() catch |err| {
+                std.debug.panic("Cannot calculate probabilities for {f}, recieved {any}", .{ signal, err });
+            };
+            for (probabilities, 0..) |prob, idx| {
+                dataset._total_pdf_scratch[idx] += param.value * prob;
+            }
+            fitlog.debug("Param info: {any}\n", .{param});
+        }
+        fitlog.debug("Total pdf: {any}\n", .{dataset._total_pdf_scratch});
+        var total: f64 = 0;
+        for (dataset._total_pdf_scratch, 0..) |val, idx| {
+            if (dataset.data_counts[idx] == 0) {
+                continue;
+            }
+            total += dataset.data_counts[idx] * std.math.log(f64, std.math.e, val);
+        }
+        const nll = expected_events - total;
+        return nll;
+    }
+
+    pub fn defNLL(self: Fit, func_params: ?*anyopaque) f64 {
+        _ = func_params;
         var results: f64 = 0;
-        for (self.systematics.items) |systematic| {
-            results += penalty(systematic.parameter.value, systematic.parameter.expectation, systematic.parameter.sigma);
-            fitlog.debug("Penalty for {s}: {d}", .{ systematic.name, results });
+        for (self._parameters.items) |param| {
+            const pen = param.getPriorNLL();
+            fitlog.debug("Penalty for {s}: {d}", .{ param.name, pen });
+            results += pen;
         }
         for (self.datasets.items) |dataset| {
-            results += dataset.getNLL();
+            results += defDatasetNLL(dataset.*);
             fitlog.debug("After datasets calculation: {d}", .{results});
         }
         return results;
     }
 
     pub fn getNLL(self: Fit) f64 {
-        return self.llfn(self);
+        return self.llfn(self, self.llfn_params);
     }
 
     pub fn minimize(self: *Fit, optimizer: ?min.Optimizer) min.FitResult {
@@ -115,135 +140,47 @@ pub const Fit = struct {
         }
     }
 
-    /// Returns "appropriately" spaced step sizes based on the fit state
-    /// Caller owns the resulting slice
-    pub fn getStepSizes(self: Fit, allocator: std.mem.Allocator) ![]f64 {
-        var dxs = try std.ArrayList(f64).initCapacity(allocator, self._free.items.len);
-        for (self._free.items) |p| {
-            if (std.math.isFinite(p.sigma)) {
-                dxs.appendAssumeCapacity(p.sigma);
-            } else {
-                if (std.math.isFinite(p.bounds[0]) and std.math.isFinite(p.bounds[1])) {
-                    dxs.appendAssumeCapacity((p.bounds[1] - p.bounds[0]) / 10);
-                } else {
-                    var step: f64 = 1;
-                    if (p.value > 3) {
-                        step = std.math.sqrt(@abs(p.value));
-                    } else {
-                        step = 1;
-                    }
-                    if (p.value - step < p.bounds[0]) {
-                        step = (p.value - p.bounds[0]) / 10;
-                    }
-                    if (p.value - step > p.bounds[1]) {
-                        step = (p.bounds[1] - p.value) / 10;
-                    }
-                    dxs.appendAssumeCapacity(step);
-                }
-            }
-        }
-        std.debug.assert(dxs.items.len == self._free.items.len);
-        return dxs.toOwnedSlice(allocator);
-    }
-
-    fn getParameterScanBound(self: *Fit, param: *Parameter, optimizer: ?min.Optimizer, fitresult: min.FitResult, positve: bool) !f64 {
-        const step_sizes = try self.getStepSizes(self._allocator);
-        defer self._allocator.free(step_sizes);
-
-        var step_size = param.value;
-        for (self._free.items, 0..) |p, pidx| {
-            if (p == param) {
-                step_size = step_sizes[pidx];
-            }
-        }
-
+    fn getParameterScanBound(self: *Fit, param: *Parameter, init_step: f64) ![2]f64 {
+        const max_steps = 1e5;
         var state = try self.cacheParameterStates(self._allocator);
-        defer {
-            for (self._parameters.items) |p| {
-                const param_state = state.get(p.name).?;
-                p.value = param_state.value;
-                p.free = param_state.free;
-            }
-            self.updateParameters() catch unreachable;
-            state.deinit();
+        defer self.applyAndFreeParameterStates(&state);
+
+        const init_nll = self.getNLL();
+        const init_value = param.value;
+
+        var low_x = param.clampValue(init_value - init_step);
+        param.value = low_x;
+        var low = self.getNLL() - init_nll;
+        var si: f64 = 0;
+        while (low > 5 and param.value > param.bounds[0] and si < max_steps) : (si += 1) {
+            param.value = param.clampValue(init_value - (init_value - low_x) / 2);
+            low_x = param.value;
+            low = self.getNLL() - init_nll;
+        }
+        si = 0;
+        while (low < 5 and param.value > param.bounds[0] and si < max_steps) : (si += 1) {
+            param.value = param.clampValue(init_value - (init_value - low_x) * 2);
+            low_x = param.value;
+            low = self.getNLL() - init_nll;
         }
 
-        param.free = false;
-        try self.updateParameters();
-        const original_value = param.value;
-        if (param.value > 3) {
-            step_size = std.math.sqrt(param.value);
-        } else {
-            step_size = param.value * 0.10;
+        var high_x = param.clampValue(init_value + init_step);
+        param.value = high_x;
+        var high = self.getNLL() - init_nll;
+        si = 0;
+        while (high > 5 and high_x < param.bounds[1] and si < max_steps) : (si += 1) {
+            param.value = param.clampValue(init_value + (high_x - init_value) / 2);
+            high_x = param.value;
+            high = self.getNLL() - init_nll;
+        }
+        si = 0;
+        while (high < 5 and high_x < param.bounds[1] and si < max_steps) : (si += 1) {
+            param.value = param.clampValue(init_value + (high_x - init_value) * 2);
+            high_x = param.value;
+            high = self.getNLL() - init_nll;
         }
 
-        var nll = fitresult.value;
-        var num_iter: u16 = 0;
-        while (nll - fitresult.value < 2) {
-            if (num_iter > 1024) {
-                fitlog.warn("Could not find parameter scan range", .{});
-                break;
-            }
-            step_size *= 2;
-            if (positve) {
-                param.value = original_value + step_size;
-            } else {
-                param.value = original_value - step_size;
-            }
-            if (param.value < param.bounds[0] or param.value > param.bounds[1]) {
-                if (num_iter == 0) {
-                    if (positve) {
-                        step_size = (param.bounds[1] - original_value) / 10;
-                        param.value = original_value + step_size;
-                    } else {
-                        step_size = (original_value - param.bounds[0]) / 10;
-                        param.value = original_value - step_size;
-                    }
-                } else {
-                    if (positve) {
-                        param.value = param.bounds[1];
-                    } else {
-                        param.value = param.bounds[0];
-                    }
-                    fitlog.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
-                    break;
-                }
-            }
-            const new_min = self.minimize(optimizer);
-            nll = new_min.value;
-            num_iter += 1;
-            for (self._free.items) |p| {
-                const param_state = state.get(p.name).?;
-                p.value = param_state.value;
-            }
-        }
-        num_iter = 0;
-        while (nll - fitresult.value > 4) {
-            if (num_iter > 1024) {
-                fitlog.warn("Could not find parameter scan range", .{});
-                break;
-            }
-            step_size /= 2;
-            if (positve) {
-                param.value = original_value + step_size;
-            } else {
-                param.value = original_value - step_size;
-            }
-            if (param.value < param.bounds[0] or param.value > param.bounds[1]) {
-                fitlog.warn("Reached bound for {s} with {d}", .{ param.name, param.value });
-                break;
-            }
-            const new_min = self.minimize(optimizer);
-            nll = new_min.value;
-            num_iter += 1;
-            for (self._free.items) |p| {
-                const param_state = state.get(p.name).?;
-                p.value = param_state.value;
-            }
-        }
-        const return_val = param.value;
-        param.value = original_value;
-        return return_val;
+        return .{ low_x, high_x };
     }
 
     pub fn cacheParameterStates(self: *Fit, allocator: std.mem.Allocator) !std.StringHashMap(Parameter) {
@@ -269,10 +206,17 @@ pub const Fit = struct {
     pub fn posteriorScan(self: *Fit, optimize: ?min.Optimizer, param: *Parameter, fitresult: min.FitResult, options: ScanOptions) ![2][]f64 {
         const xs = try self._allocator.alloc(f64, options.steps);
         const dnlls = try self._allocator.alloc(f64, options.steps);
+        const param_idx = blk: {
+            for (self._free.items, 0..) |p, idx| {
+                if (p == param) {
+                    break :blk idx;
+                }
+            }
+            fitlog.err("Cannot computer posterior scan for a fixed paramters {s}", .{param.name});
+            return error.FixedParam;
+        };
 
         var state = try self.cacheParameterStates(self._allocator);
-        param.free = false;
-        try self.updateParameters();
         defer {
             for (self._parameters.items) |p| {
                 const param_state = state.get(p.name).?;
@@ -285,13 +229,20 @@ pub const Fit = struct {
 
         var bounds: [2]f64 = undefined;
         if (options.range == null) {
-            bounds[0] = try self.getParameterScanBound(param, optimize, fitresult, false);
-            bounds[1] = try self.getParameterScanBound(param, optimize, fitresult, true);
-            fitlog.info("Bounds from scan: {d}, {d}", .{ bounds[0], bounds[1] });
+            const covariance = try self.calculateCovarianceMatrix(self._allocator, .{});
+            defer {
+                for (covariance) |row| self._allocator.free(row);
+                self._allocator.free(covariance);
+            }
+            const cov_var = covariance[param_idx][param_idx];
+            bounds = try self.getParameterScanBound(param, @sqrt(cov_var));
         } else {
             bounds[0] = options.range.?[0];
             bounds[1] = options.range.?[1];
         }
+
+        param.free = false;
+        try self.updateParameters();
 
         for (0..options.steps) |idx| {
             fitlog.info("On step {d} out of {d}", .{ idx, options.steps });
@@ -540,7 +491,7 @@ pub const Fit = struct {
                                 };
                                 break :blk rv;
                             };
-                            std.debug.print("Trying for {s}: {d} - {d},\n\t{s}: {d} - {d}\n", .{
+                            hesslog.warn("Trying for {s}: {d} - {d},\n\t{s}: {d} - {d}", .{
                                 pi.name,
                                 pi_range[0],
                                 pi_range[1],
@@ -549,7 +500,7 @@ pub const Fit = struct {
                                 pj_range[1],
                             });
                             nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
-                            std.debug.print("LL values are {any}\n", .{nll_values});
+                            hesslog.warn("LL values are {any}", .{nll_values});
                             // If changing pj does not affect calculation, and we are at the bounds,
                             // then just bump the LL slightly so we can move on.
                             if (pi_range[0] == pi.bounds[0] and pj_range[0] == pj.bounds[0]) {
@@ -646,7 +597,6 @@ pub const Dataset = struct {
     data: std.StringHashMap([]f64) = undefined,
     data_counts: []f64 = &.{},
     binned_data: []f64 = &.{},
-    nllfn: *const fn (Dataset) f64 = Dataset.defNLL,
     _total_pdf_scratch: []f64 = &.{},
 
     _allocator: std.mem.Allocator = undefined,
@@ -749,40 +699,5 @@ pub const Dataset = struct {
         signal_ptr.* = try .init(self._allocator, name, points, self, options);
         try self.signals.append(self._allocator, signal_ptr);
         return signal_ptr;
-    }
-
-    pub fn defNLL(self: Dataset) f64 {
-        utilities.zeroArray(self._total_pdf_scratch);
-        var expected_events: f64 = 0;
-        var penalty_total: f64 = 0;
-        for (self.signals.items) |signal| {
-            const param = signal.parameter;
-            expected_events += param.value;
-            const probabilities = signal.getProbability() catch |err| {
-                std.debug.panic("Cannot calculate probabilities for {f}, recieved {any}", .{ signal, err });
-            };
-            for (probabilities, 0..) |prob, idx| {
-                self._total_pdf_scratch[idx] += param.value * prob;
-            }
-            fitlog.debug("Param info: {any}\n", .{param});
-            const pen = penalty(param.value, param.expectation, param.sigma);
-            penalty_total += pen;
-            fitlog.debug("Param penalty: {d}\n", .{pen});
-        }
-        fitlog.debug("Total from penalties: {any}\n", .{penalty_total});
-        fitlog.debug("Total pdf: {any}\n", .{self._total_pdf_scratch});
-        var total: f64 = 0;
-        for (self._total_pdf_scratch, 0..) |val, idx| {
-            if (self.data_counts[idx] == 0) {
-                continue;
-            }
-            total += self.data_counts[idx] * std.math.log(f64, std.math.e, val);
-        }
-        const nll = expected_events - total + penalty_total;
-        return nll;
-    }
-
-    pub fn getNLL(self: Dataset) f64 {
-        return self.nllfn(self);
     }
 };
