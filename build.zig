@@ -149,6 +149,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const tests_run = b.addRunArtifact(tests);
-    const tests_step = b.step("test", "run tests");
+    const tests_step = b.step("test", "Run tests");
     tests_step.dependOn(&tests_run.step);
 }
