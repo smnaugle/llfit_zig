@@ -11,14 +11,15 @@ const hesslog = std.log.scoped(.llfit);
 
 pub const Fit = struct {
     name: []const u8,
+    _allocator: std.mem.Allocator,
+
     datasets: std.ArrayList(*Dataset) = .empty,
     // name_dataset: std.StringHashMap(*Dataset) = .{},
     systematics: std.ArrayList(*fit.Systematic) = .empty,
 
-    llfn: *const fn (self: Fit, ?*anyopaque) f64 = defNLL,
+    llfn: *const fn (self: *Fit, ?*anyopaque) f64 = defNLL,
     llfn_params: ?*anyopaque = null,
 
-    _allocator: std.mem.Allocator,
     _free: std.ArrayList(*Parameter) = .empty,
     _fixed: std.ArrayList(*Parameter) = .empty,
     _parameters: std.ArrayList(*Parameter) = .empty,
@@ -37,9 +38,9 @@ pub const Fit = struct {
         return self.datasets.items[self.datasets.items.len - 1];
     }
 
-    pub fn addSystematic(self: *Fit, options: fit.Systematic.SystematicOptions) !*fit.Systematic {
+    pub fn addSystematic(self: *Fit, name: []const u8, options: fit.Systematic.SystematicOptions) !*fit.Systematic {
         const systematic_ptr = try self._allocator.create(fit.Systematic);
-        systematic_ptr.* = .init(options);
+        systematic_ptr.* = .init(name, options);
         try self.systematics.append(self._allocator, systematic_ptr);
         return systematic_ptr;
     }
@@ -85,15 +86,25 @@ pub const Fit = struct {
         }
     }
 
-    pub fn defDatasetNLL(dataset: Dataset) f64 {
+    pub fn defDatasetNLL(dataset: *Dataset, io: std.Io) f64 {
         utilities.zeroArray(dataset._total_pdf_scratch);
+
+        var prob_futures = dataset._allocator.alloc(std.Io.Future([]f64), dataset.signals.items.len) catch @panic("OOM");
+        defer dataset._allocator.free(prob_futures);
+        for (dataset.signals.items, 0..) |signal, idx| {
+            prob_futures[idx] = io.async(fit.Signal.getProbability, .{signal});
+        }
+
         var expected_events: f64 = 0;
-        for (dataset.signals.items) |signal| {
+        for (dataset.signals.items, 0..) |signal, i| {
+            // var fut = prob_futures.get(signal.name);
+            // const probabilities = fut.?.await(io);
+            const probabilities = prob_futures[i].await(io);
             const param = signal.parameter;
             expected_events += param.value;
-            const probabilities = signal.getProbability() catch |err| {
-                std.debug.panic("Cannot calculate probabilities for {f}, recieved {any}", .{ signal, err });
-            };
+            // const probabilities = signal.getProbability() catch |err| {
+            //     std.debug.panic("Cannot calculate probabilities for {f}, recieved {any}", .{ signal, err });
+            // };
             for (probabilities, 0..) |prob, idx| {
                 dataset._total_pdf_scratch[idx] += param.value * prob;
             }
@@ -111,8 +122,10 @@ pub const Fit = struct {
         return nll;
     }
 
-    pub fn defNLL(self: Fit, func_params: ?*anyopaque) f64 {
+    pub fn defNLL(self: *const Fit, func_params: ?*anyopaque) f64 {
         _ = func_params;
+        var io = std.Io.Threaded.init_single_threaded;
+        defer io.deinit();
         var results: f64 = 0;
         for (self._parameters.items) |param| {
             const pen = param.getPriorNLL();
@@ -120,13 +133,31 @@ pub const Fit = struct {
             results += pen;
         }
         for (self.datasets.items) |dataset| {
-            results += defDatasetNLL(dataset.*);
+            results += defDatasetNLL(dataset, io.io());
             fitlog.debug("After datasets calculation: {d}", .{results});
         }
         return results;
     }
 
-    pub fn getNLL(self: Fit) f64 {
+    pub const MulthreadOptions = struct {
+        io: std.Io,
+    };
+    pub fn multithreadedNLL(self: *const Fit, func_params: ?*anyopaque) f64 {
+        const options: *MulthreadOptions = @ptrCast(@alignCast(func_params));
+        var results: f64 = 0;
+        for (self._parameters.items) |param| {
+            const pen = param.getPriorNLL();
+            fitlog.debug("Penalty for {s}: {d}", .{ param.name, pen });
+            results += pen;
+        }
+        for (self.datasets.items) |dataset| {
+            results += defDatasetNLL(dataset, options.io);
+            fitlog.debug("After datasets calculation: {d}", .{results});
+        }
+        return results;
+    }
+
+    pub fn getNLL(self: *Fit) f64 {
         return self.llfn(self, self.llfn_params);
     }
 
@@ -212,7 +243,7 @@ pub const Fit = struct {
                     break :blk idx;
                 }
             }
-            fitlog.err("Cannot computer posterior scan for a fixed paramters {s}", .{param.name});
+            fitlog.err("Cannot computer posterior scan for a fixed parameters {s}", .{param.name});
             return error.FixedParam;
         };
 
@@ -234,7 +265,12 @@ pub const Fit = struct {
                 for (covariance) |row| self._allocator.free(row);
                 self._allocator.free(covariance);
             }
-            const cov_var = covariance[param_idx][param_idx];
+            var cov_var = covariance[param_idx][param_idx];
+            if (cov_var < 0) {
+                hesslog.warn("Got a negative variance {d} for {s}", .{ cov_var, param.name });
+                hesslog.warn("\tUsing 10% as first step size instead", .{});
+                cov_var = std.math.pow(f64, param.value * 0.1, 2);
+            }
             bounds = try self.getParameterScanBound(param, @sqrt(cov_var));
         } else {
             bounds[0] = options.range.?[0];
@@ -263,7 +299,7 @@ pub const Fit = struct {
         step: ?f64 = null,
         check_minimum: bool = true,
     };
-    pub fn calculateNegativeHessian(self: Fit, allocator: std.mem.Allocator, options: HessianOptions) ![][]f64 {
+    pub fn calculateNegativeHessian(self: *Fit, allocator: std.mem.Allocator, options: HessianOptions) ![][]f64 {
         const Func = struct {
             pub fn getParameterRange(p: *Parameter, p_in: f64, s: f64) ![2]f64 {
                 var p_high = p_in + s;
@@ -283,7 +319,7 @@ pub const Fit = struct {
                 }
                 return .{ p_low, p_high };
             }
-            pub fn calculateNLL(pfit: *const Fit, pi: *Parameter, pj: *Parameter, pi_values: [2]f64, pj_values: [2]f64) [4]f64 {
+            pub fn calculateNLL(pfit: *Fit, pi: *Parameter, pj: *Parameter, pi_values: [2]f64, pj_values: [2]f64) [4]f64 {
                 const pi_in = pi.value;
                 const pj_in = pj.value;
 
@@ -379,7 +415,7 @@ pub const Fit = struct {
 
                 var pi_range = try Func.getParameterRange(pi, pi_in, si);
 
-                var nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                var nll_values = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
 
                 if (i != j) {
                     while (nll_values[0] == nll_values[1]) {
@@ -398,7 +434,7 @@ pub const Fit = struct {
                         hesslog.warn("pj: {s}\n", .{pj.name});
                         hesslog.warn("si: {any}\n", .{si});
                         hesslog.warn("Retrying with range {any}\n", .{pi_range});
-                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        nll_values = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
                         hesslog.warn("Got vals {any}\n", .{nll_values});
                         if (std.mem.eql(f64, &pi_range, &pi.bounds)) {
                             hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pi.name});
@@ -420,7 +456,7 @@ pub const Fit = struct {
                         hesslog.warn("pj: {s}\n", .{pj.name});
                         hesslog.warn("sj: {any}\n", .{sj});
                         hesslog.warn("Retrying with range {any}\n", .{pj_range});
-                        nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                        nll_values = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
                         // If changing pj does not affect calculation, and we are at the bounds,
                         // then just bump the LL slightly so we can move on.
                         if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
@@ -442,7 +478,7 @@ pub const Fit = struct {
                             hesslog.warn("nll_values lt min  nll: {d}, {any}\n", .{ input_min_nll, nll_values });
                             hesslog.warn("Params are {s} and {s}", .{ pi.name, pj.name });
                             hesslog.warn("Ranges are are {any} and {any}", .{ pi_range, pj_range });
-                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            nll_values = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
                             // If changing pj does not affect calculation, and we are at the bounds,
                             // then just bump the LL slightly so we can move on.
                             if (std.mem.eql(f64, &pj_range, &pj.bounds)) {
@@ -460,7 +496,7 @@ pub const Fit = struct {
                                 };
                                 break :blk rv;
                             };
-                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            nll_values = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
                             // If changing pj does not affect calculation, and we are at the bounds,
                             // then just bump the LL slightly so we can move on.
                             if (std.mem.eql(f64, &pi_range, &pi.bounds)) {
@@ -499,7 +535,7 @@ pub const Fit = struct {
                                 pj_range[0],
                                 pj_range[1],
                             });
-                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            nll_values = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
                             hesslog.warn("LL values are {any}", .{nll_values});
                             // If changing pj does not affect calculation, and we are at the bounds,
                             // then just bump the LL slightly so we can move on.
@@ -526,7 +562,7 @@ pub const Fit = struct {
                                 };
                                 break :blk rv;
                             };
-                            nll_values = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                            nll_values = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
                             if (std.mem.eql(f64, &pi_range, &pi.bounds) and std.mem.eql(f64, &pj_range, &pj.bounds)) {
                                 hesslog.warn("Could not find adequate range for {s}, at bounds.", .{pj.name});
                                 break;
@@ -536,7 +572,7 @@ pub const Fit = struct {
                 }
 
                 hesslog.debug("Done with {s}, {s}", .{ pj.name, pi.name });
-                const final_vals = Func.calculateNLL(&self, pi, pj, pi_range, pj_range);
+                const final_vals = Func.calculateNLL(self, pi, pj, pi_range, pj_range);
                 hesslog.debug("resut is {d:2}, {d:2}, {d:2}, {d:2}", .{ final_vals[0], final_vals[1], final_vals[2], final_vals[3] });
                 hesslog.debug("sj {d}, si {d}", .{ pj_range[1] - pj_range[0], pi_range[1] - pi_range[0] });
                 const res = Func.nllToHess(final_vals, pi_range[1] - pi_range[0], pj_range[1] - pj_range[0], i, j);
@@ -550,7 +586,7 @@ pub const Fit = struct {
         return hess;
     }
 
-    pub fn calculateCovarianceMatrix(self: Fit, allocator: std.mem.Allocator, hessian_options: HessianOptions) ![][]f64 {
+    pub fn calculateCovarianceMatrix(self: *Fit, allocator: std.mem.Allocator, hessian_options: HessianOptions) ![][]f64 {
         const neg_hess = try calculateNegativeHessian(self, allocator, hessian_options);
         defer {
             for (neg_hess) |row| {

@@ -20,7 +20,7 @@ pub const Systematic = struct {
         timer: std.Io.Clock = .real,
         io: std.Io.Threaded = .init_single_threaded,
     };
-    name: []const u8 = "",
+    name: []const u8,
     parameter: Parameter,
     /// An optional pointer to allow for the storage of additional state.
     data: ?*anyopaque = null,
@@ -31,7 +31,6 @@ pub const Systematic = struct {
     profiling: Profiling = .{},
 
     pub const SystematicOptions = struct {
-        name: []const u8,
         value: f64 = 1,
         expectation: ?f64 = null,
         sigma: f64 = std.math.inf(f64),
@@ -40,7 +39,7 @@ pub const Systematic = struct {
         applySystematicFn: FuncType = noTransform,
         data: ?*anyopaque = null,
     };
-    pub fn init(options: SystematicOptions) Systematic {
+    pub fn init(name: []const u8, options: SystematicOptions) Systematic {
         // var sys = Systematic{}; sys.name = options.name; sys.parameter.name =
         //     options.name; sys.parameter.value = options.value; if
         //     (options.expectation) |expectation| { sys.parameter.expectation =
@@ -53,11 +52,11 @@ pub const Systematic = struct {
         var expectation = options.value;
         if (options.expectation != null) expectation = options.expectation.?;
         return .{
-            .name = options.name,
+            .name = name,
             .applySystematicFn = options.applySystematicFn,
             .data = options.data,
             .parameter = .{
-                .name = options.name,
+                .name = name,
                 .value = options.value,
                 .bounds = options.bounds,
                 .free = options.free,

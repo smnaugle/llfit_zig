@@ -39,6 +39,7 @@ pub const Signal = struct {
     /// Histogram to which systematics should be applied, has buffer bins
     histogram: fit.Histogram = undefined,
 
+    arena: std.heap.ArenaAllocator = undefined,
     _allocator: std.mem.Allocator = undefined,
     _scratch_points: [][]f64 = &.{},
     _last_systematics: std.ArrayList(f64) = .empty,
@@ -154,6 +155,7 @@ pub const Signal = struct {
         sig.histogram = try .init(allocator, backing_hist_bins, sig._scratch_points, backing_options);
         sig.output_histogram = try .init(allocator, bins, sig._scratch_points, sig.options.histogram_options);
         sig.output_histogram.options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
+        sig.arena = .init(sig._allocator);
         return sig;
     }
 
@@ -176,6 +178,7 @@ pub const Signal = struct {
         self.output_histogram.deinit();
         self.original_histogram.deinit();
         self.histogram.deinit();
+        self.arena.deinit();
     }
 
     /// Add a systematic effect to the signal
@@ -222,7 +225,7 @@ pub const Signal = struct {
         return hist;
     }
 
-    pub fn getProbability(self: *Signal) ![]f64 {
+    pub fn getProbability(self: *Signal) []f64 {
         var rerun: bool = false;
         for (self.systematics.items, 0..) |systematic, idx| {
             if (systematic.parameter.value != self._last_systematics.items[idx]) {
@@ -236,7 +239,7 @@ pub const Signal = struct {
         if (rerun) {
             // Reset histogram when running systematics
             self.histogram.deinit();
-            self.histogram = try self.original_histogram.clone(self._allocator);
+            self.histogram = self.original_histogram.clone(self._allocator) catch |e| std.debug.panic("Cannot clone histogram {any}", .{e});
             self.needs_binning = false;
             std.log.debug("Rerunning systematics for {s}", .{self.name});
             for (self.systematics.items) |systematic| {
@@ -249,7 +252,7 @@ pub const Signal = struct {
             var idx = offset;
             var kept: usize = 0;
             while (idx < self.histogram.contents.len) : (idx += stride) {
-                const bin = try self.histogram.flatIndexToBin(idx);
+                const bin = self.histogram.flatIndexToBin(idx) catch |e| std.debug.panic("Cannot convert index {d} to bin {any}", .{ idx, e });
                 var in_dim = true;
                 for (bin, 0..) |b, dim_idx| {
                     if (b < self.buffer_bins[dim_idx][0] or b >= (self.buffer_bins[dim_idx][0] + self.dimensions[dim_idx].bins.len - 1)) {

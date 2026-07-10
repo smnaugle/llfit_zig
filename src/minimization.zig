@@ -34,7 +34,7 @@ pub fn wrapperNLL(opt: c_uint, xs: [*c]const f64, grad: [*c]f64, fit_ptr: ?*anyo
     }
 
     std.log.debug("NLL: {d}", .{ret});
-    if ((count % MSG_COUNT) == 0) {
+    if (MSG_COUNT != 0 and (count % MSG_COUNT) == 0) {
         for (fit._free.items, 0..) |param, idx| {
             param.*.value = xs[idx];
             std.log.info("{s} is {d}", .{ param.name, param.value });
@@ -50,9 +50,10 @@ pub const FitResult = struct {
     status: i8 = 0,
     status_string: []const u8 = &.{},
     value: f64 = 0,
+    num_evals: usize = 0,
 
     pub fn format(self: FitResult, writer: *std.Io.Writer) !void {
-        try writer.print("{{status: {d}, status_string: {s}, value: {d}}}", .{ self.status, self.status_string, self.value });
+        try writer.print("{{status: {d}, status_string: {s}, evaluations: {d}, value: {d}}}", .{ self.status, self.status_string, self.value, self.num_evals });
     }
 };
 
@@ -136,7 +137,13 @@ pub const SimpleOptimizer = struct {
         for (self.fit._free.items, 0..) |param, idx| {
             param.value = xs[idx];
         }
-        const fit_result: FitResult = .{ .value = res, .status = @intCast(res_code), .status_string = std.mem.span(nlopt.nlopt_result_to_string(res_code)) };
+        const num_evals = nlopt.nlopt_get_numevals(opt);
+        const fit_result: FitResult = .{
+            .value = res,
+            .status = @intCast(res_code),
+            .status_string = std.mem.span(nlopt.nlopt_result_to_string(res_code)),
+            .num_evals = @intCast(num_evals),
+        };
         return fit_result;
     }
 

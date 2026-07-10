@@ -14,11 +14,15 @@ pub fn main() !void {
     defer if (gpa.deinit() == .leak) {
         std.debug.print("Memory leak...\n", .{});
     };
+
+    var io: std.Io.Threaded = .init_single_threaded;
+    defer io.deinit();
+
     const allocator = gpa.allocator();
     var fitter: fit.Fit = try .init(allocator, "fit");
     defer fitter.deinit();
     const ppo = try fitter.addDataset("ppo");
-    const energy_shift = try fitter.addSystematic(.{ .name = "energy_shift", .value = 1, .expectation = 1.0, .sigma = 0.01, .applySystematicFn = &scale });
+    const energy_shift = try fitter.addSystematic("energy_shift", .{ .value = 1, .expectation = 1.0, .sigma = 0.01, .applySystematicFn = &scale });
     _ = try ppo.addDimension("energy", &.{ 1, 2, 3, 4, 5 });
     _ = try ppo.addDimension("radius", &.{ 0, 1000, 2000, 3000 });
     try ppo.addData(&.{
@@ -44,7 +48,7 @@ pub fn main() !void {
     try bipo214.addSystematic(energy_shift);
     try tl208.addSystematic(energy_shift);
     try fitter.updateParameters();
-    const probs = try bipo214.getProbability();
+    const probs = bipo214.getProbability();
     std.debug.print("hist: {any}\n", .{probs});
     std.debug.print("data: {any}\n", .{ppo.data_counts});
     std.debug.print("eval: {d}\n", .{fitter.getNLL()});
