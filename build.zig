@@ -1,6 +1,7 @@
 const std = @import("std");
 
-fn buildGSL(b: *std.Build, threads: usize) *std.Build.Dependency {
+fn buildGSL(b: *std.Build, threads: usize) *std.Build.Step {
+    const step = b.step("gsl", "Build gsl");
     const gsl_dep = b.dependency("gsl", .{});
 
     const path_buf = b.allocator.alloc(u8, std.fs.max_path_bytes) catch @panic("OOM");
@@ -17,7 +18,7 @@ fn buildGSL(b: *std.Build, threads: usize) *std.Build.Dependency {
         break :exblk true;
     };
 
-    if (exists) return gsl_dep;
+    if (exists) return step;
 
     gsl_dep.builder.build_root.handle.createDirPath(
         io.io(),
@@ -49,12 +50,12 @@ fn buildGSL(b: *std.Build, threads: usize) *std.Build.Dependency {
     gsl_install.setCwd(gsl_dep.path(""));
     gsl_install.setName("Install gsl");
     gsl_install.step.dependOn(&gsl_build.step);
-
-    gsl_dep.builder.default_step.dependOn(&gsl_install.step);
-    return gsl_dep;
+    step.dependOn(&gsl_install.step);
+    return step;
 }
 
-fn buildNLOPT(b: *std.Build, threads: usize) *std.Build.Dependency {
+fn buildNLOPT(b: *std.Build, threads: usize) *std.Build.Step {
+    const step = b.step("nlopt", "Build nlopt");
     const dep = b.dependency("nlopt", .{});
     const src_dir = dep.builder.build_root.path.?;
     const build_dir = dep.builder.pathJoin(&.{ src_dir, "build" });
@@ -83,8 +84,8 @@ fn buildNLOPT(b: *std.Build, threads: usize) *std.Build.Dependency {
     });
     nlopt_build.setName("Make and install NLOPT");
     nlopt_build.step.dependOn(&nlopt_configure.step);
-    dep.builder.default_step.dependOn(&nlopt_build.step);
-    return dep;
+    step.dependOn(&nlopt_build.step);
+    return step;
 }
 
 pub fn build(b: *std.Build) void {
@@ -94,9 +95,11 @@ pub fn build(b: *std.Build) void {
     const target = std.Build.standardTargetOptions(b, .{});
     const optimize = std.Build.standardOptimizeOption(b, .{});
 
-    const gsl_dep = buildGSL(b, dependency_threads);
+    const gsl_step = buildGSL(b, dependency_threads);
+    const gsl_dep = b.dependency("gsl", .{});
 
-    const nlopt_dep = buildNLOPT(b, dependency_threads);
+    const nlopt_step = buildNLOPT(b, dependency_threads);
+    const nlopt_dep = b.dependency("nlopt", .{});
 
     const translate_c = b.addTranslateC(.{
         .root_source_file = b.path("src/c_imports.h"),
@@ -106,10 +109,7 @@ pub fn build(b: *std.Build) void {
     });
 
     translate_c.addIncludePath(gsl_dep.path("install/include"));
-    translate_c.step.dependOn(gsl_dep.builder.default_step);
-
     translate_c.addIncludePath(nlopt_dep.path("install/include"));
-    translate_c.step.dependOn(nlopt_dep.builder.default_step);
 
     const tc_mod = translate_c.createModule();
 
@@ -123,11 +123,12 @@ pub fn build(b: *std.Build) void {
         .name = "llfit",
         .root_module = mod,
     });
-    lib.step.dependOn(nlopt_dep.builder.default_step);
+    lib.step.dependOn(&translate_c.step);
+    lib.step.dependOn(nlopt_step);
+    lib.step.dependOn(gsl_step);
     lib.root_module.addLibraryPath(nlopt_dep.path("install/lib"));
     lib.root_module.linkSystemLibrary("nlopt", .{ .preferred_link_mode = .static });
 
-    lib.step.dependOn(gsl_dep.builder.default_step);
     lib.root_module.addLibraryPath(gsl_dep.path("install/lib"));
     lib.root_module.linkSystemLibrary("gsl", .{ .preferred_link_mode = .static });
 
@@ -148,7 +149,6 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    exe.step.dependOn(gsl_dep.builder.default_step);
     exe.root_module.addImport("c_imports", tc_mod);
     exe.root_module.addImport("llfit", lib.root_module);
     b.installArtifact(exe);
@@ -160,6 +160,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    tests.step.dependOn(&lib.step);
     const tests_run = b.addRunArtifact(tests);
     const tests_step = b.step("test", "Run tests");
     tests_step.dependOn(&tests_run.step);
