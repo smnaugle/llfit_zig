@@ -32,6 +32,7 @@ fn buildGSL(b: *std.Build, threads: usize) *std.Build.Step {
         "--prefix",
         install_path,
     });
+    _ = gsl_configure.captureStdOut(.{});
     gsl_configure.setCwd(gsl_dep.path(""));
     gsl_configure.setName("Configure gsl");
 
@@ -40,6 +41,7 @@ fn buildGSL(b: *std.Build, threads: usize) *std.Build.Step {
         "-j",
         b.fmt("{d}", .{threads}),
     });
+    _ = gsl_build.captureStdOut(.{});
     gsl_build.setCwd(gsl_dep.path(""));
     gsl_build.setName("Make gsl");
     gsl_build.step.dependOn(&gsl_configure.step);
@@ -47,6 +49,7 @@ fn buildGSL(b: *std.Build, threads: usize) *std.Build.Step {
         "make",
         "install",
     });
+    _ = gsl_install.captureStdOut(.{});
     gsl_install.setCwd(gsl_dep.path(""));
     gsl_install.setName("Install gsl");
     gsl_install.step.dependOn(&gsl_build.step);
@@ -72,6 +75,7 @@ fn buildNLOPT(b: *std.Build, threads: usize) *std.Build.Step {
         "-DBUILD_SHARED_LIBS=OFF",
         "-DNLOPT_CXX=OFF",
     });
+    _ = nlopt_configure.captureStdOut(.{});
     nlopt_configure.setName("Configure NLOPT");
 
     const nlopt_build = dep.builder.addSystemCommand(&.{
@@ -82,6 +86,7 @@ fn buildNLOPT(b: *std.Build, threads: usize) *std.Build.Step {
         "-j",
         b.fmt("{d}", .{threads}),
     });
+    _ = nlopt_build.captureStdOut(.{});
     nlopt_build.setName("Make and install NLOPT");
     nlopt_build.step.dependOn(&nlopt_configure.step);
     step.dependOn(&nlopt_build.step);
@@ -107,6 +112,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+
+    translate_c.step.dependOn(nlopt_step);
+    translate_c.step.dependOn(gsl_step);
 
     translate_c.addIncludePath(gsl_dep.path("install/include"));
     translate_c.addIncludePath(nlopt_dep.path("install/include"));
