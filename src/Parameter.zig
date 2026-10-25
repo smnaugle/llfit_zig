@@ -93,8 +93,9 @@ pub fn getStep(self: Parameter) [2]f64 {
 }
 
 pub fn setFrom(self: *Parameter, other: Parameter) void {
-    inline for (@typeInfo(@TypeOf(self.*)).@"struct".fields) |field| {
-        @field(self, field.name) = @field(other, field.name);
+    const ti = @typeInfo(@TypeOf(self.*)).@"struct";
+    inline for (ti.field_names) |field| {
+        @field(self, field) = @field(other, field);
     }
 }
 

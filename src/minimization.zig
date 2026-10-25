@@ -85,7 +85,7 @@ pub const SimpleOptimizer = struct {
     pub fn minimize(ptr: *anyopaque, allocator: std.mem.Allocator) FitResult {
         const self: *SimpleOptimizer = @ptrCast(@alignCast(ptr));
 
-        const opt_c_str = allocator.dupeZ(u8, self.optimizer_name) catch |err| allocError(err);
+        const opt_c_str = allocator.dupeSentinel(u8, self.optimizer_name, 0x00) catch |err| allocError(err);
         defer allocator.free(opt_c_str);
         const opt_code = nlopt.nlopt_algorithm_from_string(opt_c_str);
         const opt = nlopt.nlopt_create(opt_code, @intCast(self.fit._free.items.len)) orelse {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const zig_version = @import("builtin").zig_version;
 
 fn buildGSL(b: *std.Build, threads: usize) *std.Build.Step {
     const step = b.step("gsl", "Build gsl");
@@ -9,29 +10,17 @@ fn buildGSL(b: *std.Build, threads: usize) *std.Build.Step {
 
     var io = std.Io.Threaded.init_single_threaded;
 
-    const exists = exblk: {
-        gsl_dep.builder.build_root.handle.access(io.io(), "install/lib/libgsl.a", .{}) catch {
-            gsl_dep.builder.build_root.handle.access(io.io(), "install/lib/libgsl.so", .{}) catch {
-                break :exblk false;
-            };
-        };
-        break :exblk true;
-    };
-
-    if (exists) return step;
-
-    gsl_dep.builder.build_root.handle.createDirPath(
+    gsl_dep.builder.root.root_dir.handle.createDirPath(
         io.io(),
         "install/",
     ) catch @panic("Cannot make directory");
 
-    const absolute_path = gsl_dep.builder.build_root.path.?;
-    const install_path = b.pathJoin(&.{ absolute_path, "/install" });
+    const install_path = gsl_dep.path("./install");
     const gsl_configure = gsl_dep.builder.addSystemCommand(&.{
         "./configure",
-        "--prefix",
-        install_path,
     });
+    gsl_configure.addArg("--prefix");
+    gsl_configure.addDirectoryArg2(install_path, .{ .make_absolute = true });
     _ = gsl_configure.captureStdOut(.{});
     gsl_configure.setCwd(gsl_dep.path(""));
     gsl_configure.setName("Configure gsl");
@@ -54,13 +43,26 @@ fn buildGSL(b: *std.Build, threads: usize) *std.Build.Step {
     gsl_install.setName("Install gsl");
     gsl_install.step.dependOn(&gsl_build.step);
     step.dependOn(&gsl_install.step);
+
+    if (zig_version.major == 0 and zig_version.minor == 17) {
+        const patch_path = gsl_dep.builder.path("install/include/gsl/gsl_complex.h");
+        const patch = gsl_dep.builder.addSystemCommand(&.{"sed"});
+        patch.setName("Patching long double to double for zig 0.17 translate hack");
+        patch.setCwd(gsl_dep.path(""));
+        patch.addArg("-i -e");
+        patch.addArg("s/long double/double/g");
+        _ = patch.addFileArg(patch_path);
+        patch.step.dependOn(&gsl_install.step);
+        step.dependOn(&patch.step);
+    }
+
     return step;
 }
 
 fn buildNLOPT(b: *std.Build, threads: usize) *std.Build.Step {
     const step = b.step("nlopt", "Build nlopt");
     const dep = b.dependency("nlopt", .{});
-    const src_dir = dep.builder.build_root.path.?;
+    const src_dir = dep.builder.root.root_dir.path.?;
     const build_dir = dep.builder.pathJoin(&.{ src_dir, "build" });
     const install_dir = dep.builder.pathJoin(&.{ src_dir, "install" });
 
