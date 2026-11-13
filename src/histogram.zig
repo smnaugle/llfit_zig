@@ -113,6 +113,7 @@ pub const Histogram = struct {
 
     pub fn normalize(self: *Histogram) void {
         const tot: f64 = self.integral();
+        if (tot == 0) return;
         for (0..self.contents.len) |idx| {
             self.contents[idx] = (self.contents[idx]) / tot;
         }

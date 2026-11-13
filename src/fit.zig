@@ -112,11 +112,15 @@ pub const Fit = struct {
         }
         fitlog.debug("Total pdf: {any}\n", .{dataset._total_pdf_scratch});
         var total: f64 = 0;
-        for (dataset._total_pdf_scratch, 0..) |val, idx| {
+        for (dataset._total_pdf_scratch, 0..) |unnorm_val, idx| {
             if (dataset.data_counts[idx] == 0) {
                 continue;
             }
-            total += dataset.data_counts[idx] * std.math.log(f64, std.math.e, val);
+            var norm_val = unnorm_val;
+            // FIXME: I don't like this llfn interface... also the floor here should be
+            // changeable by callers
+            if (norm_val <= 1e-17) norm_val = 1e-17;
+            total += dataset.data_counts[idx] * std.math.log(f64, std.math.e, norm_val);
         }
         const nll = expected_events - total;
         return nll;

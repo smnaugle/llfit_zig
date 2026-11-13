@@ -48,6 +48,7 @@ pub const Signal = struct {
 
     pub const Options = struct {
         buffer_bins: ?[]const [2]u32 = null,
+        // FIXME: These aren't passed through anymore and are therefore meaningless
         histogram_options: fit.Histogram.Options = .{
             .zero_pad = 1e-12,
             .density = true,
@@ -149,12 +150,12 @@ pub const Signal = struct {
             backing_hist_bins[idx] = try std.mem.concat(allocator, f64, &.{ low_bins, sig.dimensions[idx].bins, high_bins });
         }
 
-        sig.original_histogram = try .init(allocator, backing_hist_bins, sig._scratch_points, sig.options.histogram_options);
-        var backing_options = sig.options.histogram_options;
-        backing_options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
-        sig.histogram = try .init(allocator, backing_hist_bins, sig._scratch_points, backing_options);
-        sig.output_histogram = try .init(allocator, bins, sig._scratch_points, sig.options.histogram_options);
-        sig.output_histogram.options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
+        sig.original_histogram = try .init(allocator, backing_hist_bins, sig._scratch_points, .{ .density = true, .zero_pad = null });
+        // var backing_options = sig.options.histogram_options;
+        // backing_options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
+        sig.histogram = try .init(allocator, backing_hist_bins, sig._scratch_points, .{ .density = true, .zero_pad = null });
+        sig.output_histogram = try .init(allocator, bins, sig._scratch_points, .{ .density = true, .zero_pad = null });
+        // sig.output_histogram.options.zero_pad = std.sort.min(f64, sig.original_histogram.contents, {}, std.sort.asc(f64)).?;
         sig.arena = .init(sig._allocator);
         return sig;
     }
@@ -264,7 +265,7 @@ pub const Signal = struct {
                 kept += 1;
             }
 
-            self.output_histogram.zeroPad(self.output_histogram.options.zero_pad.?);
+            // self.output_histogram.zeroPad(self.output_histogram.options.zero_pad.?);
             if (self.output_histogram.options.density) {
                 self.output_histogram.normalize();
             }
