@@ -237,7 +237,7 @@ pub const Histogram = struct {
         return try .init(allocator, self, dimension);
     }
 
-    pub fn deinit(self: *Histogram) void {
+    pub fn deinit(self: Histogram) void {
         for (self.bins) |*b| {
             self._allocator.free(b.*);
         }
