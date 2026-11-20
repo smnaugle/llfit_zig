@@ -171,6 +171,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     tests.step.dependOn(&lib.step);
+    tests.root_module.addOptions("config", lib_options);
     const tests_run = b.addRunArtifact(tests);
     const tests_step = b.step("test", "Run tests");
     tests_step.dependOn(&tests_run.step);

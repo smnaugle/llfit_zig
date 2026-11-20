@@ -15,7 +15,11 @@ pub const Fit = struct {
 
     datasets: std.ArrayList(*Dataset) = .empty,
     // name_dataset: std.StringHashMap(*Dataset) = .{},
-    systematics: std.ArrayList(*fit.Systematic) = .empty,
+
+    /// Contains and owns all the systematics
+    systematics: std.ArrayList(fit.Systematic) = .empty,
+    /// Applied to the total PDF
+    global_systematics: std.ArrayList(fit.Systematic) = .empty,
 
     llfn: *const fn (self: *Fit, ?*anyopaque) f64 = defNLL,
     llfn_params: ?*anyopaque = null,
@@ -38,11 +42,8 @@ pub const Fit = struct {
         return self.datasets.items[self.datasets.items.len - 1];
     }
 
-    pub fn addSystematic(self: *Fit, name: []const u8, options: fit.Systematic.SystematicOptions) !*fit.Systematic {
-        const systematic_ptr = try self._allocator.create(fit.Systematic);
-        systematic_ptr.* = .init(name, options);
-        try self.systematics.append(self._allocator, systematic_ptr);
-        return systematic_ptr;
+    pub fn addSystematic(self: *Fit, systematic: fit.Systematic) !void {
+        try self.systematics.append(self._allocator, systematic);
     }
 
     pub fn deinit(self: *Fit) void {
@@ -52,10 +53,6 @@ pub const Fit = struct {
             self._allocator.destroy(dataset);
         }
         self.datasets.deinit(self._allocator);
-        for (self.systematics.items) |systematic| {
-            systematic.deinit();
-            self._allocator.destroy(systematic);
-        }
         self.systematics.deinit(self._allocator);
         self._free.deinit(self._allocator);
         self._fixed.deinit(self._allocator);
@@ -77,11 +74,14 @@ pub const Fit = struct {
         self._fixed.clearRetainingCapacity();
         self._parameters.clearRetainingCapacity();
         for (self.systematics.items) |sys| {
-            try classifyAndAppendParameter(self, &sys.parameter);
+            const params = sys.getParams();
+            for (params) |p| {
+                try self.classifyAndAppendParameter(p);
+            }
         }
         for (self.datasets.items) |dataset| {
             for (dataset.signals.items) |sig| {
-                try classifyAndAppendParameter(self, &sig.parameter);
+                try self.classifyAndAppendParameter(&sig.parameter);
             }
         }
     }

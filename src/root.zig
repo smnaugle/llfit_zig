@@ -7,6 +7,8 @@ pub const Dimension = @import("Dimension.zig");
 pub const Signal = @import("signal.zig").Signal;
 pub const SystematicOptions = @import("systematics.zig").Systematic.SystematicOptions;
 pub const Systematic = @import("systematics.zig").Systematic;
+pub const ShiftSystematic = @import("systematics.zig").ShiftSystematic;
+pub const ScaleSystematic = @import("systematics.zig").ScaleSystematic;
 pub const Histogram = @import("histogram.zig").Histogram;
 pub const DimensionPoints = struct { dimension: *Dimension = undefined, points: []const f64 = &.{} };
 

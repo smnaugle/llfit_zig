@@ -20,7 +20,7 @@ pub const Signal = struct {
 
     name: []const u8 = undefined,
     input_mc: std.StringHashMap([]f64) = undefined,
-    systematics: std.ArrayList(*syts.Systematic) = .empty,
+    systematics: std.ArrayList(syts.Systematic) = .empty,
     needs_binning: bool = true,
     dimensions: []*fit.Dimension = &.{},
     dataset: *fit.Dataset = undefined,
@@ -187,11 +187,13 @@ pub const Signal = struct {
     ///
     /// Currently systematics are expected to be applied to the binned signal,
     /// so they should act on the histogram member variable
-    pub fn addSystematic(self: *Signal, systematic: *syts.Systematic) !void {
+    pub fn addSystematic(self: *Signal, systematic: syts.Systematic) !void {
         try self.systematics.append(self._allocator, systematic);
         // Here the value we are appending does not matter as long as it is different, we just need to trigger
         // applying systematics on the first iteration
-        try self._last_systematics.append(self._allocator, systematic.parameter.value - 1);
+        for (systematic.getParams()) |param| {
+            try self._last_systematics.append(self._allocator, param.value - 1);
+        }
     }
 
     pub fn getOwnedHistogram(self: Signal, points: ?[][]f64, options: fit.Histogram.Options) !fit.Histogram {
@@ -228,9 +230,11 @@ pub const Signal = struct {
     pub fn getProbability(self: *Signal) []f64 {
         var rerun: bool = false;
         for (self.systematics.items, 0..) |systematic, idx| {
-            if (systematic.parameter.value != self._last_systematics.items[idx]) {
-                self._last_systematics.items[idx] = systematic.parameter.value;
-                rerun = true;
+            for (systematic.getParams()) |param| {
+                if (param.value != self._last_systematics.items[idx]) {
+                    self._last_systematics.items[idx] = param.value;
+                    rerun = true;
+                }
             }
         }
         if (self.first_iter) {
@@ -243,7 +247,7 @@ pub const Signal = struct {
             self.needs_binning = false;
             std.log.debug("Rerunning systematics for {s}", .{self.name});
             for (self.systematics.items) |systematic| {
-                systematic.applySystematic(self);
+                systematic.apply(&self.histogram);
             }
             const stride = self.histogram.bins[0].len - 1;
             const offset = @as(usize, @intCast(self.buffer_bins[0][0]));
