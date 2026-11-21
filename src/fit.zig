@@ -16,10 +16,8 @@ pub const Fit = struct {
     datasets: std.ArrayList(*Dataset) = .empty,
     // name_dataset: std.StringHashMap(*Dataset) = .{},
 
-    /// Contains and owns all the systematics
-    systematics: std.ArrayList(fit.Systematic) = .empty,
-    /// Applied to the total PDF
-    global_systematics: std.ArrayList(fit.Systematic) = .empty,
+    /// Contains all the systematics
+    systematics: std.StringHashMap(fit.Systematic) = undefined,
 
     llfn: *const fn (self: *Fit, ?*anyopaque) f64 = defNLL,
     llfn_params: ?*anyopaque = null,
@@ -28,22 +26,25 @@ pub const Fit = struct {
     _fixed: std.ArrayList(*Parameter) = .empty,
     _parameters: std.ArrayList(*Parameter) = .empty,
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !Fit {
+        const map = std.StringHashMap(fit.Systematic).init(allocator);
         return .{
             .name = try allocator.dupe(u8, name),
             ._allocator = allocator,
+            .systematics = map,
         };
     }
 
     pub fn addDataset(self: *Fit, name: []const u8) !*Dataset {
         const dataset_ptr = try self._allocator.create(Dataset);
-        dataset_ptr.* = try Dataset.init(self._allocator, name);
+        dataset_ptr.* = try Dataset.init(self._allocator, self, name);
         // const dataset: Dataset = try .init(self._allocator, name);
         try self.datasets.append(self._allocator, dataset_ptr);
         return self.datasets.items[self.datasets.items.len - 1];
     }
 
     pub fn addSystematic(self: *Fit, systematic: fit.Systematic) !void {
-        try self.systematics.append(self._allocator, systematic);
+        for (systematic.getParams()) |param| try self.classifyAndAppendParameter(param);
+        try self.systematics.put(systematic.name, systematic);
     }
 
     pub fn deinit(self: *Fit) void {
@@ -53,7 +54,7 @@ pub const Fit = struct {
             self._allocator.destroy(dataset);
         }
         self.datasets.deinit(self._allocator);
-        self.systematics.deinit(self._allocator);
+        self.systematics.deinit();
         self._free.deinit(self._allocator);
         self._fixed.deinit(self._allocator);
         self._parameters.deinit(self._allocator);
@@ -73,7 +74,8 @@ pub const Fit = struct {
         self._free.clearRetainingCapacity();
         self._fixed.clearRetainingCapacity();
         self._parameters.clearRetainingCapacity();
-        for (self.systematics.items) |sys| {
+        var iter = self.systematics.valueIterator();
+        while (iter.next()) |sys| {
             const params = sys.getParams();
             for (params) |p| {
                 try self.classifyAndAppendParameter(p);
@@ -84,42 +86,6 @@ pub const Fit = struct {
                 try self.classifyAndAppendParameter(&sig.parameter);
             }
         }
-    }
-
-    pub fn defDatasetNLL(dataset: *Dataset, io: std.Io) f64 {
-        utilities.zeroArray(dataset._total_pdf_scratch);
-
-        var prob_futures = dataset._allocator.alloc(std.Io.Future([]f64), dataset.signals.items.len) catch @panic("OOM");
-        defer dataset._allocator.free(prob_futures);
-        for (dataset.signals.items, 0..) |signal, idx| {
-            prob_futures[idx] = io.async(fit.Signal.getProbability, .{signal});
-        }
-
-        var expected_events: f64 = 0;
-        for (dataset.signals.items, 0..) |signal, i| {
-            // var fut = prob_futures.get(signal.name);
-            // const probabilities = fut.?.await(io);
-            const probabilities = prob_futures[i].await(io);
-            const param = signal.parameter;
-            expected_events += param.value;
-            // const probabilities = signal.getProbability() catch |err| {
-            //     std.debug.panic("Cannot calculate probabilities for {f}, recieved {any}", .{ signal, err });
-            // };
-            for (probabilities, 0..) |prob, idx| {
-                dataset._total_pdf_scratch[idx] += param.value * prob;
-            }
-            fitlog.debug("Param info: {any}\n", .{param});
-        }
-        fitlog.debug("Total pdf: {any}\n", .{dataset._total_pdf_scratch});
-        var total: f64 = 0;
-        for (dataset._total_pdf_scratch, 0..) |val, idx| {
-            if (dataset.data_counts[idx] == 0) {
-                continue;
-            }
-            total += dataset.data_counts[idx] * std.math.log(f64, std.math.e, val);
-        }
-        const nll = expected_events - total;
-        return nll;
     }
 
     pub fn defNLL(self: *const Fit, func_params: ?*anyopaque) f64 {
@@ -133,7 +99,7 @@ pub const Fit = struct {
             results += pen;
         }
         for (self.datasets.items) |dataset| {
-            results += defDatasetNLL(dataset, io.io());
+            results += dataset.defDatasetNLL(io.io());
             fitlog.debug("After datasets calculation: {d}", .{results});
         }
         return results;
@@ -151,7 +117,7 @@ pub const Fit = struct {
             results += pen;
         }
         for (self.datasets.items) |dataset| {
-            results += defDatasetNLL(dataset, options.io);
+            results += dataset.defDatasetNLL(dataset, options.io);
             fitlog.debug("After datasets calculation: {d}", .{results});
         }
         return results;
@@ -627,21 +593,26 @@ pub const Fit = struct {
 
 pub const Dataset = struct {
     name: []const u8 = "",
+    fit: *const Fit = undefined,
     dimensions: std.ArrayList(*fit.Dimension) = .empty,
     signals: std.ArrayList(*fit.Signal) = .empty,
+    /// Applied to the total PDF
+    systematics: std.ArrayList(fit.Systematic) = .empty,
     // "energy": [e1, e2, ...]
     data: std.StringHashMap([]f64) = undefined,
     data_counts: []f64 = &.{},
     binned_data: []f64 = &.{},
     _total_pdf_scratch: []f64 = &.{},
+    _total_histogram: fit.Histogram = undefined,
 
     _allocator: std.mem.Allocator = undefined,
-    pub fn init(allocator: std.mem.Allocator, name: []const u8) !Dataset {
-        var dataset = Dataset{};
-        dataset.name = name;
-        dataset._allocator = allocator;
-        dataset.data = .init(allocator);
-        return dataset;
+    pub fn init(allocator: std.mem.Allocator, parent_fit: *const Fit, name: []const u8) !Dataset {
+        return .{
+            .name = name,
+            ._allocator = allocator,
+            .data = .init(allocator),
+            .fit = parent_fit,
+        };
     }
 
     pub fn deinit(self: *Dataset) void {
@@ -660,6 +631,7 @@ pub const Dataset = struct {
             self._allocator.free(val.key_ptr.*);
             self._allocator.free(val.value_ptr.*);
         }
+        self.systematics.deinit(self._allocator);
         self.data.deinit();
         self._allocator.free(self.data_counts);
         self._allocator.free(self._total_pdf_scratch);
@@ -684,6 +656,7 @@ pub const Dataset = struct {
         defer hist.deinit();
         self.data_counts = try self._allocator.dupe(f64, hist.contents);
         self._total_pdf_scratch = try self._allocator.alloc(f64, self.data_counts.len);
+        self._total_histogram = try .init(self._allocator, bins, points, .{});
     }
 
     pub fn addPrebinnedData(self: *Dataset, data: []const f64) !void {
@@ -735,5 +708,50 @@ pub const Dataset = struct {
         signal_ptr.* = try .init(self._allocator, name, points, self, options);
         try self.signals.append(self._allocator, signal_ptr);
         return signal_ptr;
+    }
+
+    pub fn linkSystematic(self: *Dataset, name: []const u8) !void {
+        const systematic = self.fit.systematics.get(name);
+        if (systematic == null) {
+            return error.UnknownSystematic;
+        }
+        try self.systematics.append(self._allocator, systematic.?);
+    }
+
+    pub fn defDatasetNLL(self: *Dataset, io: std.Io) f64 {
+        utilities.zeroArray(self._total_histogram.contents);
+
+        var prob_futures = self._allocator.alloc(std.Io.Future([]f64), self.signals.items.len) catch @panic("OOM");
+        defer self._allocator.free(prob_futures);
+        for (self.signals.items, 0..) |signal, idx| {
+            prob_futures[idx] = io.async(fit.Signal.getProbability, .{signal});
+        }
+
+        var expected_events: f64 = 0;
+        for (self.signals.items, 0..) |signal, i| {
+            // var fut = prob_futures.get(signal.name);
+            // const probabilities = fut.?.await(io);
+            const probabilities = prob_futures[i].await(io);
+            const param = signal.parameter;
+            expected_events += param.value;
+            // const probabilities = signal.getProbability() catch |err| {
+            //     std.debug.panic("Cannot calculate probabilities for {f}, recieved {any}", .{ signal, err });
+            // };
+            for (probabilities, 0..) |prob, idx| {
+                self._total_histogram.contents[idx] += param.value * prob;
+            }
+            fitlog.debug("Param info: {any}\n", .{param});
+        }
+        for (self.systematics.items) |systematic| systematic.apply(&self._total_histogram);
+        fitlog.debug("Total pdf: {any}\n", .{self._total_histogram.contents});
+        var total: f64 = 0;
+        for (self._total_histogram.contents, 0..) |val, idx| {
+            if (self.data_counts[idx] == 0) {
+                continue;
+            }
+            total += self.data_counts[idx] * std.math.log(f64, std.math.e, val);
+        }
+        const nll = expected_events - total;
+        return nll;
     }
 };

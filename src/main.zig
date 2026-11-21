@@ -57,8 +57,8 @@ pub fn main() !void {
         },
         .{},
     );
-    try bipo214.addSystematic(eshift_syst.toSystematic());
-    try tl208.addSystematic(eshift_syst.toSystematic());
+    _ = tl208;
+    try ppo.linkSystematic("energy_shift");
     try fitter.updateParameters();
     const probs = bipo214.getProbability();
     std.debug.print("hist: {any}\n", .{probs});

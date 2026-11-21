@@ -6,6 +6,8 @@ const Allocator = @import("std").mem.Allocator;
 const utilities = @import("utilities.zig");
 const Parameter = @import("Parameter.zig");
 const Histogram = @import("histogram.zig").Histogram;
+const Signal = @import("signal.zig").Signal;
+const Dataset = @import("fit.zig").Dataset;
 
 pub const Systematic = struct {
     const Profiling = struct {
@@ -35,6 +37,7 @@ pub const Systematic = struct {
 
     ptr: *anyopaque,
     vtable: *const VTable,
+    name: []const u8,
 
     pub const VTable = struct {
         apply: *const fn (ptr: *anyopaque, *Histogram) void,
@@ -140,6 +143,7 @@ pub fn DomainSystematic(tranformation: enum { shift, scale }) type {
                     .apply = apply,
                     .getParams = getParams,
                 },
+                .name = self.parameter.name,
                 .ptr = @ptrCast(self),
             };
         }
@@ -406,7 +410,7 @@ pub const SmearSystematic = struct {
     }
 
     pub fn toSystematic(self: *SmearSystematic) Systematic {
-        return .{ .ptr = @ptrCast(self), .vtable = &.{
+        return .{ .ptr = @ptrCast(self), .name = self.parameter.name, .vtable = &.{
             .apply = apply,
             .getParams = getParams,
         } };

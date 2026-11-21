@@ -187,13 +187,10 @@ pub const Signal = struct {
     ///
     /// Currently systematics are expected to be applied to the binned signal,
     /// so they should act on the histogram member variable
-    pub fn addSystematic(self: *Signal, systematic: syts.Systematic) !void {
-        try self.systematics.append(self._allocator, systematic);
-        // Here the value we are appending does not matter as long as it is different, we just need to trigger
-        // applying systematics on the first iteration
-        for (systematic.getParams()) |param| {
-            try self._last_systematics.append(self._allocator, param.value - 1);
-        }
+    pub fn linkSystematic(self: *Signal, name: []const u8) !void {
+        const systematic = self.dataset.fit.systematics.get(name);
+        if (systematic == null) return error.UnknownSystematic;
+        try self.systematics.append(self._allocator, systematic.?);
     }
 
     pub fn getOwnedHistogram(self: Signal, points: ?[][]f64, options: fit.Histogram.Options) !fit.Histogram {
@@ -278,6 +275,11 @@ pub const Signal = struct {
         self.first_iter = false;
         return self.probability;
     }
+
+    // pub fn copyForThread(self: *const Signal, allocator: std.mem.Allocator) !Signal {
+    //     var copy: Signal = .{};
+    //     return copy;
+    // }
 
     pub fn format(self: @This(), writer: *std.Io.Writer) !void {
         const temp_allocator = std.heap.page_allocator;
