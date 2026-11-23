@@ -117,7 +117,7 @@ pub const Fit = struct {
             results += pen;
         }
         for (self.datasets.items) |dataset| {
-            results += dataset.defDatasetNLL(dataset, options.io);
+            results += dataset.defDatasetNLL(options.io);
             fitlog.debug("After datasets calculation: {d}", .{results});
         }
         return results;
